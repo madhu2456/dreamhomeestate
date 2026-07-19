@@ -18,11 +18,22 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # listing_id must allow NULL for freeform quick posts
+    # listing_id MUST be nullable for freeform quick posts (no listing).
+    # Use DO block so re-runs are safe even if already nullable.
     op.execute(
         """
-        ALTER TABLE publication_campaigns
-          ALTER COLUMN listing_id DROP NOT NULL
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'publication_campaigns'
+              AND column_name = 'listing_id'
+              AND is_nullable = 'NO'
+          ) THEN
+            ALTER TABLE publication_campaigns
+              ALTER COLUMN listing_id DROP NOT NULL;
+          END IF;
+        END $$;
         """
     )
     op.execute(

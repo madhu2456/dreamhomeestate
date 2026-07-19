@@ -123,31 +123,35 @@ async def create_quick_post(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:
-        # Common production miss: migration e8f9a0b1c2d3 not applied
         msg = str(exc)
         logger.exception("quick_post_create_failed", error=msg)
-        if any(
-            s in msg.lower()
-            for s in (
-                "campaign_kind",
-                "listing_id",
-                "media_urls",
-                "undefinedcolumn",
-                "does not exist",
-                "notnullviolation",
-                "null value in column",
+        # Detect real schema problems only (avoid false positives on any error
+        # that merely mentions "listing_id" in a stack/SQL fragment).
+        low = msg.lower()
+        schema_hint = (
+            ("undefinedcolumn" in low and "publication_campaigns" in low)
+            or ("column" in low and "campaign_kind" in low and "does not exist" in low)
+            or (
+                "null value in column" in low
+                and "listing_id" in low
+                and "publication_campaigns" in low
             )
-        ):
+            or ("notnullviolation" in low and "listing_id" in low)
+        )
+        if schema_hint:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=(
-                    "Database is missing quick-post columns. On the server run: "
-                    "docker compose -f docker-compose.prod.yml exec api alembic upgrade head"
+                    "Quick-post schema incomplete: listing_id must be NULLABLE and "
+                    "campaign_kind/body/media_urls must exist. On the server run:\n"
+                    "docker compose -f docker-compose.prod.yml exec -T postgres "
+                    "psql -U postgres -d realestate -c "
+                    "\"ALTER TABLE publication_campaigns ALTER COLUMN listing_id DROP NOT NULL;\""
                 ),
             ) from exc
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create quick post: {msg[:300]}",
+            detail=f"Failed to create quick post: {msg[:500]}",
         ) from exc
 
     audit_svc = AuditService(db)
@@ -163,7 +167,14 @@ async def create_quick_post(
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
-    return PublicationCampaignOut.model_validate(campaign)
+    try:
+        return PublicationCampaignOut.model_validate(campaign)
+    except Exception as exc:
+        logger.exception("quick_post_response_validate_failed", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Quick post saved but response failed: {exc!s}"[:500],
+        ) from exc
 
 
 @router.get("/campaigns/{campaign_id}", response_model=PublicationCampaignOut)
