@@ -4,12 +4,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from jinja2 import BaseLoader, Environment, TemplateNotFound
+from jinja2 import BaseLoader
 from jinja2.sandbox import SandboxedEnvironment
 
-from app.config import get_settings
 from app.models import ProviderEnum
-
 
 # ─── Platform capability limits ─────────────────────────────────────
 
@@ -52,7 +50,7 @@ ALLOWED_GLOBALS: dict[str, Any] = {
     "upper": lambda s: s.upper() if s else "",
     "title": lambda s: s.title() if s else "",
     "capitalize": lambda s: s.capitalize() if s else "",
-    "truncate": lambda s, l: (s[:l - 3] + "...") if len(s) > l else s,
+    "truncate": lambda s, n: (s[:n - 3] + "...") if len(s) > n else s,
     "default": lambda v, d: v if v else d,
     "urlencode": lambda s: __import__("urllib.parse").parse.quote(s) if s else "",
 }
@@ -210,7 +208,6 @@ def _postprocess_instagram(
             f"Too many hashtags ({len(hashtags)}); Instagram allows max {limits['hashtag_max_count']}"
         )
 
-    strip_trailing_newlines = True
     stripped = body.rstrip("\n")
     if len(stripped) != len(body):
         body = stripped
@@ -232,7 +229,6 @@ def _postprocess_x(
             f"(currently {len(body)})"
         )
 
-    strip_trailing_newlines = True
     stripped = body.rstrip("\n")
     if len(stripped) != len(body):
         body = stripped

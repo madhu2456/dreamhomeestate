@@ -1,7 +1,6 @@
 """Typer CLI for admin operations: create-owner, create-organization, create-user."""
 
 import asyncio
-import uuid
 
 import structlog
 import typer

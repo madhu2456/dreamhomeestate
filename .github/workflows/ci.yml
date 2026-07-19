@@ -51,7 +51,7 @@ jobs:
           pnpm install --frozen-lockfile
 
       - name: Lint backend (ruff)
-        run: ruff check services/api
+        run: ruff check services/api --config ruff.toml
 
       - name: Lint frontend (next lint)
         run: |

@@ -28,9 +28,24 @@ pythonpath = ["."]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+extend-exclude = [
+    "alembic/versions",  # generated migrations — long lines / autogen style
+    ".ruff_cache",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+ignore = [
+    "B008",   # FastAPI: Depends() / Query() in function defaults is intentional
+    "UP042",  # keep class X(str, Enum) for SQLAlchemy / pydantic compatibility
+    "E501",   # line length; prefer readability over wrapping every call
+]
+
+[tool.ruff.lint.per-file-ignores]
+# env.py must import models after path setup for autogenerate
+"alembic/env.py" = ["E402", "F401", "F403"]
+# Celery beat schedule import at bottom is intentional
+"app/worker/tasks.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.12"

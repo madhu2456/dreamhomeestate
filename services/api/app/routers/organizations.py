@@ -3,14 +3,13 @@
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import (
     CurrentUser,
     get_organization,
-    is_owner_or_admin,
     require_role,
 )
 from app.models import MembershipRole, Organization
@@ -22,7 +21,6 @@ from app.schemas.organization import (
     OrganizationMemberOut,
     OrganizationOut,
 )
-from app.schemas.user import UserOut
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
 logger = structlog.get_logger(__name__)

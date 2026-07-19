@@ -1,7 +1,7 @@
 """Publication service — campaign creation, job lifecycle, outbox."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,13 +10,8 @@ from app.models import (
     AttemptStatus,
     JobStatus,
     Listing,
-    MembershipRole,
-    Organization,
-    PublicationAttempt,
     PublicationCampaign,
     PublicationJob,
-    SocialAccount,
-    User,
 )
 from app.repositories.content import ContentTemplateRepository
 from app.repositories.listing import ListingRepository
@@ -99,8 +94,9 @@ class PublicationService:
         if not listing:
             raise ValueError("Listing not found")
 
-        from app.models import ListingVersion
         from sqlalchemy import select
+
+        from app.models import ListingVersion
 
         result = await self.db.execute(
             select(ListingVersion).where(
@@ -226,7 +222,7 @@ class PublicationService:
         if job.status not in (JobStatus.pending_approval,):
             raise ValueError(f"Cannot approve job in status {job.status.value}")
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         job = await self.job_repo.update_status(
             job,
             JobStatus.approved,
@@ -285,8 +281,9 @@ class PublicationService:
         return job
 
     async def execute_job(self, job: PublicationJob) -> PublicationJob:
-        import structlog
         import time
+
+        import structlog
 
         logger = structlog.get_logger(__name__)
 
@@ -327,14 +324,16 @@ class PublicationService:
         expires_at = credentials.expires_at
         if expires_at:
             expires_at_utc = (
-                expires_at.replace(tzinfo=timezone.utc) if expires_at.tzinfo is None else expires_at
+                expires_at.replace(tzinfo=UTC) if expires_at.tzinfo is None else expires_at
             )
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if expires_at_utc <= now + timedelta(seconds=60):
                 logger.info("token_refresh_attempt", account_id=str(account.id), provider=provider)
                 refresh_result = await connector.refresh_token(account, credentials)
                 if refresh_result and "access_token" in refresh_result:
-                    from app.repositories.encrypted_credentials import EncryptedCredentialsRepository
+                    from app.repositories.encrypted_credentials import (
+                        EncryptedCredentialsRepository,
+                    )
 
                     creds_repo = EncryptedCredentialsRepository(self.db)
                     expires_at_dt = None
@@ -431,7 +430,7 @@ class PublicationService:
 
         if successes == total:
             # All succeeded
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             provider_ids = [r[3] for r in results if r[3]]
             job = await self.job_repo.update_status(
                 job,
@@ -467,7 +466,7 @@ class PublicationService:
 
         else:
             # Partial success — some items succeeded, others failed
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             failed_items = "; ".join(
                 f"[item {idx}][{r[1]}]: {r[2]}"
                 for idx, r in enumerate(results)

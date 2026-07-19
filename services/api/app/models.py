@@ -2,14 +2,13 @@
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     ARRAY,
     Boolean,
     DateTime,
     Enum,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -22,7 +21,6 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
-
 
 # ---------- ENUMS ----------
 
@@ -118,7 +116,7 @@ class MediaProcessingStatus(str, enum.Enum):
 # ---------- HELPER ----------
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # ---------- MODELS ----------

@@ -70,7 +70,7 @@ async def create_campaign(
             account_overrides=body.account_overrides,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     # Audit: campaign.created
     audit_svc = AuditService(db)
@@ -152,7 +152,7 @@ async def approve_job(
     try:
         job = await svc.approve_job(job, approved_by=current_user.id)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     # Audit: job.approved
     audit_svc = AuditService(db)
@@ -187,7 +187,7 @@ async def reject_job(
     try:
         job = await svc.reject_job(job)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     # Audit: job.rejected
     audit_svc = AuditService(db)
@@ -222,7 +222,7 @@ async def retry_job(
     try:
         job = await svc.retry_job(job)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     # Audit: job.retried
     audit_svc = AuditService(db)
@@ -257,7 +257,7 @@ async def cancel_job(
     try:
         job = await svc.cancel_job(job)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     # Audit: job.cancelled
     audit_svc = AuditService(db)

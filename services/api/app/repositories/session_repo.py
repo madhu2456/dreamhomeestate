@@ -1,9 +1,9 @@
 """Repository for Session operations."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Session

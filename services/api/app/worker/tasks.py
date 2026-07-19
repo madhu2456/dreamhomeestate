@@ -1,7 +1,7 @@
 """Celery task definitions — outbox processor, job executor, scheduled publishing."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import select
@@ -9,8 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
-from app.models import JobStatus, PublicationJob, PublicationOutbox
-from app.services.lock import acquire_lock, job_lock_key, outbox_lock_key, release_lock, scheduled_lock_key
+from app.models import JobStatus, PublicationJob
+from app.services.lock import (
+    acquire_lock,
+    job_lock_key,
+    outbox_lock_key,
+    release_lock,
+    scheduled_lock_key,
+)
 from app.services.publication import PublicationService
 from app.worker.celery_app import app
 
@@ -96,7 +102,7 @@ def process_outbox(self) -> dict:
         asyncio.run(_process())
     except Exception as exc:
         logger.error("outbox_processor_error", error=str(exc))
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
 
     if lock_owner:
         try:
@@ -145,7 +151,7 @@ def execute_job(self, job_id: str) -> dict:
         return asyncio.run(_execute())
     except Exception as exc:
         logger.error("job_execution_failed", job_id=job_id, error=str(exc))
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
     finally:
         if lock_owner:
             try:
@@ -172,7 +178,7 @@ def process_scheduled() -> dict:
         nonlocal processed
         session_factory = _get_session_factory()
         async with session_factory() as db:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             result = await db.execute(
                 select(PublicationJob).where(
                     PublicationJob.status == JobStatus.approved,
@@ -206,7 +212,6 @@ def process_scheduled() -> dict:
 
 
 # Register beat schedule
-from celery.schedules import crontab
 
 app.conf.beat_schedule = {
     "process-outbox": {

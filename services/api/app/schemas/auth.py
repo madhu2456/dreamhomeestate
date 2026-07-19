@@ -1,12 +1,10 @@
 """Auth-related schemas."""
 
-import uuid
-from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field
 
-from app.schemas.user import UserOut
 from app.schemas.organization import OrganizationMemberOut
+from app.schemas.user import UserOut
 
 
 class LoginRequest(BaseModel):

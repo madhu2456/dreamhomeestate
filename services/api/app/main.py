@@ -1,6 +1,5 @@
 """FastAPI application factory for RealEstateSocial."""
 
-import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -71,8 +70,9 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        from app.logging_config import get_correlation_id
         import structlog
+
+        from app.logging_config import get_correlation_id
 
         logger = structlog.get_logger(__name__)
         logger.error("unhandled_exception", error=str(exc), exc_info=True)
@@ -87,8 +87,9 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(status.HTTP_422_UNPROCESSABLE_ENTITY)
     async def validation_exception_handler(request: Request, exc: Any) -> JSONResponse:
-        from app.logging_config import get_correlation_id
         from fastapi.exceptions import RequestValidationError
+
+        from app.logging_config import get_correlation_id
 
         if isinstance(exc, RequestValidationError):
             errors = []

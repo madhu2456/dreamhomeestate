@@ -1,0 +1,26 @@
+# Root Ruff config so `ruff check services/api` in CI picks project rules.
+# Mirrors services/api/pyproject.toml [tool.ruff].
+
+target-version = "py312"
+line-length = 100
+extend-exclude = [
+    "services/api/alembic/versions",
+    "**/alembic/versions",
+    ".ruff_cache",
+    "**/node_modules",
+    "**/.next",
+]
+
+[lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+ignore = [
+    "B008",
+    "UP042",
+    "E501",
+]
+
+[lint.per-file-ignores]
+"services/api/alembic/env.py" = ["E402", "F401", "F403"]
+"**/alembic/env.py" = ["E402", "F401", "F403"]
+"services/api/app/worker/tasks.py" = ["E402"]
+"**/app/worker/tasks.py" = ["E402"]

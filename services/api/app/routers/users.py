@@ -3,17 +3,15 @@
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import CurrentUser, get_organization, require_role
+from app.dependencies import get_organization, require_role
 from app.models import MembershipRole, Organization, User
 from app.repositories import UserRepository
 from app.repositories.organization import OrganizationRepository
 from app.schemas.user import UserCreateInOrg, UserOut
-from app.schemas.auth import MessageResponse
-from app.security import hash_password
 
 router = APIRouter(prefix="/users", tags=["users"])
 logger = structlog.get_logger(__name__)
@@ -97,7 +95,7 @@ async def get_user(
     try:
         user_uuid = uuid_mod.UUID(user_id)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID") from None
 
     user_repo = UserRepository(db)
     org_repo = OrganizationRepository(db)

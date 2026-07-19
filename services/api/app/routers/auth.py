@@ -1,7 +1,7 @@
 """Authentication router: login, logout, me, password reset."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import structlog
@@ -10,8 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db
-from app.dependencies import CurrentUser, get_current_user
-from app.models import MembershipRole
+from app.dependencies import CurrentUser
 from app.repositories import SessionRepository, UserRepository
 from app.repositories.organization import OrganizationRepository
 from app.schemas.auth import (
@@ -22,15 +21,14 @@ from app.schemas.auth import (
     PasswordReset,
     PasswordResetRequest,
 )
+from app.schemas.organization import OrganizationMemberOut
+from app.schemas.user import UserOut
 from app.security import (
-    hash_password,
+    generate_password_reset_token,
     sign_session_id,
     verify_password,
     verify_password_reset_token,
-    generate_password_reset_token,
 )
-from app.schemas.user import UserOut
-from app.schemas.organization import OrganizationMemberOut
 from app.services.audit import AuditService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -82,7 +80,7 @@ async def login(
     # Create session
     session_id = uuid.uuid4()
     session_token = sign_session_id(session_id)
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.session_max_age_seconds)
+    expires_at = datetime.now(UTC) + timedelta(seconds=settings.session_max_age_seconds)
 
     await session_repo.create(
         user_id=user.id,
@@ -208,7 +206,7 @@ async def password_reset(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid reset token",
-        )
+        ) from None
 
     user_repo = UserRepository(db)
     user = await user_repo.get_by_id(user_id)

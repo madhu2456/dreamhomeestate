@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -259,7 +259,7 @@ class XConnector(SocialConnector):
                 result: dict[str, Any] = {
                     "access_token": data["access_token"],
                     "expires_at": (
-                        datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+                        datetime.now(UTC) + timedelta(seconds=expires_in)
                     ).isoformat(),
                 }
                 if "refresh_token" in data:

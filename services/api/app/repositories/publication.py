@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -75,7 +75,7 @@ class PublicationJobRepository:
         self.db = db
 
     async def get_by_id(self, job_id: uuid.UUID) -> PublicationJob | None:
-        from sqlalchemy.orm import joinedload, selectinload
+        from sqlalchemy.orm import joinedload
 
         from app.models import SocialAccount
 

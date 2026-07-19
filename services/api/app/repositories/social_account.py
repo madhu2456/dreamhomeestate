@@ -1,7 +1,7 @@
 """Repository for SocialAccount CRUD."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,7 +74,7 @@ class SocialAccountRepository:
             provider_metadata=provider_metadata,
             is_default_destination=is_default_destination,
             created_by=created_by,
-            last_validated_at=datetime.now(timezone.utc),
+            last_validated_at=datetime.now(UTC),
         )
         self.db.add(account)
         await self.db.flush()

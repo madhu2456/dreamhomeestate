@@ -7,7 +7,7 @@ Publishing flow: create media container → poll until FINISHED → media_publis
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -389,7 +389,7 @@ class InstagramConnector(SocialConnector):
                 return {
                     "access_token": data["access_token"],
                     "expires_at": (
-                        datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+                        datetime.now(UTC) + timedelta(seconds=expires_in)
                     ).isoformat(),
                 }
             except Exception:

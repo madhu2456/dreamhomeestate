@@ -1,7 +1,7 @@
 """Repository for EncryptedOAuthCredentials operations."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,7 +43,7 @@ class EncryptedCredentialsRepository:
                 existing.scope = scope
             if expires_at is not None:
                 existing.expires_at = expires_at
-            existing.updated_at = datetime.now(timezone.utc)
+            existing.updated_at = datetime.now(UTC)
             await self.db.flush()
             await self.db.refresh(existing)
             return existing

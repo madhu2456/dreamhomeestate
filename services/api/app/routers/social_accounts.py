@@ -2,7 +2,7 @@
 
 import base64
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
@@ -233,7 +233,7 @@ async def oauth_callback(
     scope = token_response.get("scope", "")
     expires_in = token_response.get("expires_in")
     expires_at = (
-        datetime.now(timezone.utc).timestamp() + expires_in
+        datetime.now(UTC).timestamp() + expires_in
         if expires_in
         else None
     )
@@ -277,14 +277,14 @@ async def oauth_callback(
         refresh_token=refresh_token,
         token_type=token_type,
         scope=scope,
-        expires_at=datetime.fromtimestamp(expires_at, tz=timezone.utc) if expires_at else None,
+        expires_at=datetime.fromtimestamp(expires_at, tz=UTC) if expires_at else None,
     )
 
     try:
         result = await connector.validate(account, creds)
         valid = result.get("valid", False)
         new_status = AccountConnectionStatus.active if valid else AccountConnectionStatus.error
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         update_kwargs: dict[str, Any] = {
             "connection_status": new_status.value,
@@ -312,7 +312,7 @@ async def oauth_callback(
             account,
             connection_status=AccountConnectionStatus.error.value,
             last_error=str(exc),
-            last_validated_at=datetime.now(timezone.utc),
+            last_validated_at=datetime.now(UTC),
         )
 
     logger.info(
@@ -455,7 +455,7 @@ async def revoke_social_account(
     account = await account_repo.update(
         account,
         connection_status=AccountConnectionStatus.revoked.value,
-        revoked_at=datetime.now(timezone.utc),
+        revoked_at=datetime.now(UTC),
     )
 
     logger.info(
@@ -536,7 +536,7 @@ async def _do_validate_account(
         result = {"valid": False, "error": str(exc)}
 
     valid = result.get("valid", False)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     update_kwargs: dict[str, Any] = {
         "capabilities_snapshot": result,

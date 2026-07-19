@@ -1,14 +1,15 @@
 """FastAPI dependencies for auth session, current user, role checks, organization scoping."""
 
 import uuid
-from typing import Annotated, Sequence
+from typing import Annotated
 
 import structlog
-from fastapi import Cookie, Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
+from app.config import get_settings
 from app.database import get_db
 from app.models import (
     MembershipRole,
@@ -18,7 +19,6 @@ from app.models import (
     User,
 )
 from app.security import hash_token, unsign_session_id
-from app.config import get_settings
 
 settings = get_settings()
 logger = structlog.get_logger(__name__)
@@ -121,7 +121,7 @@ class RoleChecker:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid organization ID",
-            )
+            ) from None
 
         result = await db.execute(
             select(OrganizationMembership)
@@ -175,7 +175,7 @@ async def get_organization(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid organization ID",
-        )
+        ) from None
 
     org_result = await db.execute(
         select(Organization).where(Organization.id == org_uuid)

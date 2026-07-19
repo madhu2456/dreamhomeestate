@@ -1,13 +1,11 @@
 """Content builder — snapshot listing data and build canonical variable dict."""
 
-import uuid
-from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.models import Listing, ListingVersion, Organization
+from app.models import Listing, ListingVersion
 
 
 def build_variables(listing: Listing) -> dict:
@@ -137,11 +135,10 @@ async def snapshot_listing(db: AsyncSession, listing: Listing) -> ListingVersion
                 "kind": m.kind.value if hasattr(m.kind, "value") else str(m.kind),
                 "is_cover": m.is_cover,
                 "order_index": m.order_index,
-                "urls": {k: v for k, v in variants.items()},
+                "urls": dict(variants),
             })
         data["media"] = media_data
 
-    latest_version_number = listing.version
     result = await db.execute(
         select(ListingVersion)
         .where(ListingVersion.listing_id == listing.id)
