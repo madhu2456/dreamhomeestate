@@ -122,6 +122,33 @@ async def create_quick_post(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        # Common production miss: migration e8f9a0b1c2d3 not applied
+        msg = str(exc)
+        logger.exception("quick_post_create_failed", error=msg)
+        if any(
+            s in msg.lower()
+            for s in (
+                "campaign_kind",
+                "listing_id",
+                "media_urls",
+                "undefinedcolumn",
+                "does not exist",
+                "notnullviolation",
+                "null value in column",
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Database is missing quick-post columns. On the server run: "
+                    "docker compose -f docker-compose.prod.yml exec api alembic upgrade head"
+                ),
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create quick post: {msg[:300]}",
+        ) from exc
 
     audit_svc = AuditService(db)
     await audit_svc.log_campaign_action(

@@ -334,14 +334,19 @@ compose_up() {
     fi
     if [ "$i" -eq 40 ]; then
       echo "  API health timeout — dumping logs"
-      ${COMPOSE} logs --tail=80 api || true
+      ${COMPOSE} logs --tail=120 api || true
       exit 1
     fi
     sleep 3
   done
 
-  echo "Running database migrations..."
-  ${COMPOSE} exec -T api alembic upgrade head
+  echo "Running database migrations (also runs on API entrypoint)..."
+  if ! ${COMPOSE} exec -T api alembic upgrade head; then
+    echo "  Migration failed — dumping API logs"
+    ${COMPOSE} logs --tail=80 api || true
+    exit 1
+  fi
+  echo "  Migrations OK."
 
   echo "Container status:"
   ${COMPOSE} ps
