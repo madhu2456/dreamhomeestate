@@ -77,17 +77,32 @@ async def upload_media_library_item(
     """Upload an image (poster) or video for multi-account posts."""
     filename = file.filename or "upload.bin"
     ext = os.path.splitext(filename)[1].lower()
+    content_type = (file.content_type or "").lower()
 
-    if ext in media_service.ALLOWED_EXTENSIONS:
-        file_bytes, width, height, mime_type, ext = await media_service.validate_image(file)
-        item_id = uuid.uuid4()
-        object_key, public_url, size_bytes = await media_service.upload_library_image(
-            file_bytes=file_bytes,
-            org_id=org.id,
-            media_id=item_id,
-            ext=ext,
-            mime_type=mime_type,
-        )
+    is_image_ext = ext in media_service.ALLOWED_EXTENSIONS or ext == ".jpeg"
+    is_image_ct = content_type.startswith("image/")
+    is_video = ext in VIDEO_EXTENSIONS or content_type.startswith("video/")
+
+    # Prefer image path when browser reports image/* even if extension is odd
+    if is_image_ext or (is_image_ct and not is_video):
+        try:
+            file_bytes, width, height, mime_type, ext = await media_service.validate_image(file)
+            item_id = uuid.uuid4()
+            object_key, public_url, size_bytes = await media_service.upload_library_image(
+                file_bytes=file_bytes,
+                org_id=org.id,
+                media_id=item_id,
+                ext=ext,
+                mime_type=mime_type,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("media_library_image_upload_failed", error=str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Image upload failed: {exc!s}"[:300],
+            ) from exc
         item = MediaLibraryItem(
             id=item_id,
             organization_id=org.id,
@@ -101,7 +116,7 @@ async def upload_media_library_item(
             size_bytes=size_bytes,
             created_by=current_user.id,
         )
-    elif ext in VIDEO_EXTENSIONS:
+    elif is_video:
         file_bytes = await file.read()
         if len(file_bytes) > VIDEO_MAX_BYTES:
             raise HTTPException(

@@ -40,27 +40,58 @@ def get_s3_client():
     )
 
 
+def _sniff_image_extension(file_bytes: bytes, filename: str | None, content_type: str | None) -> str:
+    """Resolve extension from filename, Content-Type, or magic bytes (PNG/JPEG/WebP)."""
+    if filename:
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in ALLOWED_EXTENSIONS:
+            return ext
+        # Windows sometimes sends "file.PNG"
+        if ext.upper() in {e.upper() for e in ALLOWED_EXTENSIONS}:
+            return ext.lower()
+
+    ct = (content_type or "").split(";")[0].strip().lower()
+    by_ct = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/webp": ".webp",
+    }
+    if ct in by_ct:
+        return by_ct[ct]
+
+    # Magic bytes
+    if file_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if file_bytes[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if file_bytes[:4] == b"RIFF" and file_bytes[8:12] == b"WEBP":
+        return ".webp"
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            f"Unsupported or missing image type "
+            f"(filename={filename!r}, content_type={content_type!r}). "
+            f"Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+        ),
+    )
+
+
 async def validate_image(file: UploadFile) -> tuple[bytes, int, int, str, str]:
     """Validate an uploaded image file.
 
     Returns (file_bytes, width, height, mime_type, extension).
     Raises HTTPException on validation failure.
     """
-    if file.filename is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No filename provided",
-        )
-
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file type: {ext}. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
-        )
-
-    # Read file content (using SpooledTemporaryFile-like behavior)
+    # Read first — needed for magic-byte detection when filename is odd
     file_bytes = await file.read()
+
+    if not file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Empty file",
+        )
 
     if len(file_bytes) > MAX_FILE_SIZE:
         raise HTTPException(
@@ -68,18 +99,21 @@ async def validate_image(file: UploadFile) -> tuple[bytes, int, int, str, str]:
             detail=f"File too large. Maximum size is {MAX_FILE_SIZE // (1024 * 1024)} MB",
         )
 
-    if file.content_type and not file.content_type.startswith("image/"):
+    if file.content_type and not (
+        file.content_type.startswith("image/")
+        or file.content_type in ("application/octet-stream", "binary/octet-stream")
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only image files are supported",
+            detail=f"Only image files are supported (got {file.content_type})",
         )
+
+    ext = _sniff_image_extension(file_bytes, file.filename, file.content_type)
 
     # Validate with Pillow
     try:
         img = Image.open(io.BytesIO(file_bytes))
-        img.verify()
-        # Re-open after verify (verify can leave file pointer in bad state)
-        img = Image.open(io.BytesIO(file_bytes))
+        img.load()  # force decode (better than verify() for some PNGs)
         width, height = img.size
     except (UnidentifiedImageError, OSError) as e:
         raise HTTPException(
@@ -87,8 +121,15 @@ async def validate_image(file: UploadFile) -> tuple[bytes, int, int, str, str]:
             detail=f"Invalid or unsupported image: {str(e)}",
         ) from e
 
-    mime_type = file.content_type or f"image/{ext.lstrip('.')}"
-    if ext == ".jpg":
+    mime_map = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }
+    mime_type = mime_map.get(ext, file.content_type or f"image/{ext.lstrip('.')}")
+    if ext == ".jpeg":
+        ext = ".jpg"
         mime_type = "image/jpeg"
 
     return file_bytes, width, height, mime_type, ext

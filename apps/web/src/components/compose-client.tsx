@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ImagePlus, Loader2, Send, Trash2, Video, X } from 'lucide-react';
 
 import { apiDelete, apiGet, apiPost, ensureCsrfToken } from '@/lib/api';
