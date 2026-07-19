@@ -37,9 +37,26 @@ class MediaLibraryItemOut(BaseModel):
     height: int | None = None
     size_bytes: int | None = None
     duration_seconds: int | None = None
-    created_at: object
+    created_at: str | None = None
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_row(cls, row: MediaLibraryItem) -> MediaLibraryItemOut:
+        created = getattr(row, "created_at", None)
+        return cls(
+            id=row.id,
+            organization_id=row.organization_id,
+            kind=row.kind,
+            public_url=row.public_url,
+            mime_type=row.mime_type,
+            original_file_name=row.original_file_name,
+            width=row.width,
+            height=row.height,
+            size_bytes=row.size_bytes,
+            duration_seconds=row.duration_seconds,
+            created_at=created.isoformat() if created is not None else None,
+        )
 
 
 @router.get("", response_model=list[MediaLibraryItemOut])
@@ -61,7 +78,9 @@ async def list_media_library(
         .order_by(MediaLibraryItem.created_at.desc())
         .limit(100)
     )
-    return [MediaLibraryItemOut.model_validate(r) for r in result.scalars().all()]
+    rows = list(result.scalars().all())
+    logger.info("media_library_list", org_id=str(org.id), count=len(rows))
+    return [MediaLibraryItemOut.from_row(r) for r in rows]
 
 
 @router.post("/upload", response_model=MediaLibraryItemOut, status_code=status.HTTP_201_CREATED)
@@ -160,8 +179,9 @@ async def upload_media_library_item(
         org_id=str(org.id),
         item_id=str(item.id),
         kind=item.kind,
+        public_url=item.public_url,
     )
-    return MediaLibraryItemOut.model_validate(item)
+    return MediaLibraryItemOut.from_row(item)
 
 
 @router.delete(

@@ -35,15 +35,36 @@ export function ComposeClient({ organizations }: ComposeClientProps) {
   const [uploading, setUploading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  /** Ignore stale load() results that would wipe a just-uploaded library */
+  const loadGeneration = useRef(0);
+
+  const normalizeMedia = (raw: unknown): MediaItem | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const o = raw as Record<string, unknown>;
+    const id = o.id != null ? String(o.id) : '';
+    const public_url = o.public_url != null ? String(o.public_url) : '';
+    if (!id || !public_url) return null;
+    return {
+      id,
+      kind: String(o.kind || 'image'),
+      public_url,
+      original_file_name:
+        o.original_file_name != null ? String(o.original_file_name) : undefined,
+    };
+  };
 
   const libraryById = useMemo(() => {
     const map = new Map<string, MediaItem>();
-    for (const item of library) map.set(item.id, item);
+    for (const item of library) map.set(String(item.id), item);
     return map;
   }, [library]);
 
   const selectedMediaItems = useMemo(
-    () => selectedIds.map((id) => libraryById.get(id)).filter(Boolean) as MediaItem[],
+    () =>
+      selectedIds
+        .map((id) => libraryById.get(String(id)))
+        .filter(Boolean) as MediaItem[],
     [selectedIds, libraryById]
   );
 
@@ -54,31 +75,52 @@ export function ComposeClient({ organizations }: ComposeClientProps) {
 
   const load = useCallback(async () => {
     if (!orgId) return;
+    const gen = ++loadGeneration.current;
     setLoading(true);
     try {
-      const [acc, media] = await Promise.all([
+      const [acc, mediaRaw] = await Promise.all([
         apiGet<SocialAccount[]>(`/api/v1/organizations/${orgId}/social-accounts`),
-        apiGet<MediaItem[]>(`/api/v1/organizations/${orgId}/media-library`),
+        apiGet<unknown[]>(`/api/v1/organizations/${orgId}/media-library`),
       ]);
+      if (gen !== loadGeneration.current) return; // stale response
+
       const active = (acc || []).filter(
         (a) => a.connection_status === 'active' && (a.provider === 'instagram' || a.provider === 'x')
       );
+      const media = (mediaRaw || [])
+        .map(normalizeMedia)
+        .filter(Boolean) as MediaItem[];
+
       setAccounts(active);
-      setSelectedAccounts(active.map((a) => a.id));
-      setLibrary(media || []);
-      // Drop selections that no longer exist in the library
+      setSelectedAccounts((prev) => {
+        // Keep user account picks if still valid; else select all active
+        const activeIds = new Set(active.map((a) => a.id));
+        const kept = prev.filter((id) => activeIds.has(id));
+        return kept.length ? kept : active.map((a) => a.id);
+      });
+      // Merge server list with any items already in state (avoids race wiping uploads)
+      setLibrary((prev) => {
+        const byId = new Map<string, MediaItem>();
+        for (const m of media) byId.set(m.id, m);
+        for (const m of prev) {
+          if (!byId.has(m.id)) byId.set(m.id, m);
+        }
+        return Array.from(byId.values());
+      });
       setSelectedIds((prev) => {
-        const ids = new Set((media || []).map((m) => m.id));
-        return prev.filter((id) => ids.has(id));
+        const ids = new Set(media.map((m) => m.id));
+        // Keep selections that still exist in merged library
+        return prev.filter((id) => ids.has(id) || prev.includes(id));
       });
     } catch (err) {
+      if (gen !== loadGeneration.current) return;
       toast({
-        title: 'Failed to load',
+        title: 'Failed to load media library',
         description: err instanceof Error ? err.message : 'Error',
         variant: 'destructive',
       });
     } finally {
-      setLoading(false);
+      if (gen === loadGeneration.current) setLoading(false);
     }
   }, [orgId, toast]);
 
@@ -142,14 +184,61 @@ export function ComposeClient({ organizations }: ComposeClientProps) {
     }
   };
 
+  const formatUploadError = (errBody: unknown, status: number): string => {
+    if (!errBody || typeof errBody !== 'object') {
+      return `Upload failed (HTTP ${status})`;
+    }
+    const detail = (errBody as { detail?: unknown }).detail;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      return detail
+        .map((d) => (typeof d === 'object' && d && 'msg' in d ? String((d as { msg: string }).msg) : String(d)))
+        .filter(Boolean)
+        .join(', ');
+    }
+    return `Upload failed (HTTP ${status})`;
+  };
+
   const onUpload = async (fileList: FileList | null) => {
-    if (!fileList?.length || !orgId) return;
+    if (!fileList?.length || !orgId) {
+      toast({
+        title: 'No file selected',
+        description: 'Choose a PNG, JPG, WebP, or MP4 file.',
+        variant: 'destructive',
+      });
+      return;
+    }
     setUploading(true);
+    let okCount = 0;
     try {
-      const csrf = await ensureCsrfToken();
+      let csrf = await ensureCsrfToken();
+      if (!csrf) {
+        // One more attempt after cookie settle
+        await new Promise((r) => setTimeout(r, 200));
+        csrf = await ensureCsrfToken();
+      }
       for (const file of Array.from(fileList)) {
+        // Client-side allow-list (browsers sometimes omit extension casing)
+        const name = (file.name || 'upload').toLowerCase();
+        const okExt =
+          name.endsWith('.png') ||
+          name.endsWith('.jpg') ||
+          name.endsWith('.jpeg') ||
+          name.endsWith('.webp') ||
+          name.endsWith('.mp4') ||
+          name.endsWith('.mov') ||
+          name.endsWith('.webm') ||
+          (file.type || '').startsWith('image/') ||
+          (file.type || '').startsWith('video/');
+        if (!okExt) {
+          throw new Error(`Unsupported file “${file.name}”. Use PNG, JPG, WebP, or MP4.`);
+        }
+        if (file.size > 100 * 1024 * 1024) {
+          throw new Error(`“${file.name}” is too large (max 100 MB for video, 10 MB for images).`);
+        }
+
         const form = new FormData();
-        form.append('file', file);
+        form.append('file', file, file.name || 'image.png');
         const res = await fetch(`/api/v1/organizations/${orgId}/media-library/upload`, {
           method: 'POST',
           body: form,
@@ -158,18 +247,28 @@ export function ComposeClient({ organizations }: ComposeClientProps) {
         });
         if (!res.ok) {
           const errBody = await res.json().catch(() => ({}));
-          throw new Error(
-            typeof errBody.detail === 'string' ? errBody.detail : 'Upload failed'
-          );
+          throw new Error(formatUploadError(errBody, res.status));
         }
-        const item = (await res.json()) as MediaItem;
-        setLibrary((prev) => [item, ...prev]);
+        const raw = await res.json();
+        const item = normalizeMedia(raw);
+        if (!item) {
+          throw new Error('Upload succeeded but server returned an incomplete media item.');
+        }
+        // Bump generation so any in-flight load() cannot wipe this upload
+        loadGeneration.current += 1;
+        setLibrary((prev) => [item, ...prev.filter((m) => m.id !== item.id)]);
         setSelectedIds((prev) => {
           if (prev.includes(item.id) || prev.length >= 10) return prev;
           return [...prev, item.id];
         });
+        okCount += 1;
       }
-      toast({ title: 'Uploaded', description: 'Media added and selected for this post.' });
+      toast({
+        title: okCount === 1 ? 'Uploaded' : `${okCount} files uploaded`,
+        description: 'Media is selected for this post and listed below.',
+      });
+      // Refresh from server without wiping local items (merge in load)
+      void load();
     } catch (err) {
       toast({
         title: 'Upload failed',
@@ -178,6 +277,7 @@ export function ComposeClient({ organizations }: ComposeClientProps) {
       });
     } finally {
       setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -287,29 +387,33 @@ export function ComposeClient({ organizations }: ComposeClientProps) {
               Click a tile to select/deselect (max 10). Use the trash icon to delete from the library.
             </CardDescription>
           </div>
-          <label className="inline-flex cursor-pointer items-center gap-2 shrink-0">
+          <div className="flex shrink-0 items-center gap-2">
             <input
+              ref={fileInputRef}
               type="file"
-              accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"
+              accept="image/png,image/jpeg,image/jpg,image/webp,.png,.jpg,.jpeg,.webp,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
               multiple
-              className="hidden"
+              className="sr-only"
               onChange={(e) => {
                 void onUpload(e.target.files);
-                e.target.value = '';
               }}
               disabled={uploading}
             />
-            <Button type="button" variant="outline" size="sm" asChild disabled={uploading}>
-              <span>
-                {uploading ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <ImagePlus className="mr-2 h-4 w-4" />
-                )}
-                Upload
-              </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {uploading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <ImagePlus className="mr-2 h-4 w-4" />
+              )}
+              {uploading ? 'Uploading…' : 'Upload PNG / photo'}
             </Button>
-          </label>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Selected for this post */}
@@ -367,15 +471,19 @@ export function ComposeClient({ organizations }: ComposeClientProps) {
             </div>
           )}
 
-          {loading ? (
+          {loading && library.length === 0 ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : library.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No media yet — upload a poster or video.</p>
+            <p className="text-sm text-muted-foreground">
+              No media yet — click <strong>Upload PNG / photo</strong> above.
+            </p>
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
               {library.map((item) => {
-                const selected = selectedIds.includes(item.id);
-                const order = selected ? selectedIds.indexOf(item.id) + 1 : null;
+                const selected = selectedIds.includes(String(item.id));
+                const order = selected
+                  ? selectedIds.indexOf(String(item.id)) + 1
+                  : null;
                 return (
                   <div
                     key={item.id}
