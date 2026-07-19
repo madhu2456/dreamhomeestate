@@ -573,6 +573,21 @@ class PublicationService:
     async def _enqueue_job(self, job: PublicationJob) -> None:
         await self.job_repo.update_status(job, JobStatus.queued)
         await self._emit_event("job.queued", job)
+        # Dispatch Celery immediately so jobs do not wait for beat/outbox poll
+        try:
+            from app.worker.tasks import execute_job, process_outbox
+
+            execute_job.delay(str(job.id))
+            process_outbox.delay()
+        except Exception:
+            # Outbox + beat remain as fallback if broker is briefly unavailable
+            import structlog
+
+            structlog.get_logger(__name__).warning(
+                "celery_dispatch_failed",
+                job_id=str(job.id),
+                exc_info=True,
+            )
 
     async def _enqueue_approval(self, job: PublicationJob, approved_by: uuid.UUID | None) -> None:
         if approved_by:

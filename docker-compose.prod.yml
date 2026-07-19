@@ -130,7 +130,10 @@ services:
     build:
       context: .
       dockerfile: services/api/Dockerfile.prod
-    command: celery -A app.worker.celery_app beat --loglevel=info
+    # Write schedule file under /tmp — image filesystem is not writable by user api
+    command: >
+      celery -A app.worker.celery_app beat --loglevel=info
+      -s /tmp/celerybeat-schedule
     restart: unless-stopped
     env_file:
       - .env

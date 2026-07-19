@@ -92,10 +92,16 @@ def process_outbox(self) -> dict:
                             await svc.execute_job(job)
 
                     await repo.mark_processed(entry)
+                    await db.commit()
                     processed += 1
                 except Exception as exc:
                     logger.error("outbox_processing_failed", entry_id=str(entry.id), error=str(exc))
-                    await repo.mark_failed(entry)
+                    await db.rollback()
+                    try:
+                        await repo.mark_failed(entry)
+                        await db.commit()
+                    except Exception:
+                        await db.rollback()
                     failed += 1
 
     try:
@@ -134,12 +140,17 @@ def execute_job(self, job_id: str) -> dict:
             from app.repositories.publication import PublicationJobRepository
 
             job_repo = PublicationJobRepository(db)
-            job = await job_repo.get_by_id(job_id)
+            # get_by_id may expect UUID
+            import uuid as _uuid
+
+            jid = _uuid.UUID(job_id) if isinstance(job_id, str) else job_id
+            job = await job_repo.get_by_id(jid)
             if not job:
                 raise ValueError(f"Job {job_id} not found")
 
             svc = PublicationService(db)
             result = await svc.execute_job(job)
+            await db.commit()
             return {
                 "job_id": str(result.id),
                 "status": result.status.value,
@@ -196,6 +207,7 @@ def process_scheduled() -> dict:
                 if current and current.status == JobStatus.approved:
                     await svc._enqueue_job(current)
                     processed += 1
+            await db.commit()
 
     try:
         asyncio.run(_process())

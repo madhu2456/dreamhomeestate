@@ -25,11 +25,14 @@ app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
-# Beat schedule placeholder — tasks will be populated in later phases
-app.conf.beat_schedule = {}
-
-# Example scheduled task (uncomment when tasks exist):
-# app.conf.beat_schedule["health_check"] = {
-#     "task": "app.worker.tasks.health_check",
-#     "schedule": crontab(minute="*/5"),
-# }
+# Default beat schedule (tasks.py may extend/override on import)
+app.conf.beat_schedule = {
+    "process-outbox": {
+        "task": "app.worker.tasks.process_outbox",
+        "schedule": 15.0,
+    },
+    "process-scheduled": {
+        "task": "app.worker.tasks.process_scheduled",
+        "schedule": 60.0,
+    },
+}
