@@ -3,13 +3,13 @@
 Revision ID: e8f9a0b1c2d3
 Revises: b2c3d4e5f6a7
 Create Date: 2026-07-19
+
+Idempotent SQL so partial applies / re-runs do not fail.
 """
 
 from typing import Sequence, Union
 
-import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects import postgresql
 
 revision: str = "e8f9a0b1c2d3"
 down_revision: Union[str, None] = "b2c3d4e5f6a7"
@@ -18,70 +18,69 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.alter_column(
-        "publication_campaigns",
-        "listing_id",
-        existing_type=postgresql.UUID(as_uuid=True),
-        nullable=True,
+    # listing_id must allow NULL for freeform quick posts
+    op.execute(
+        """
+        ALTER TABLE publication_campaigns
+          ALTER COLUMN listing_id DROP NOT NULL
+        """
     )
-    op.add_column(
-        "publication_campaigns",
-        sa.Column(
-            "campaign_kind",
-            sa.String(length=32),
-            nullable=False,
-            server_default="listing",
-        ),
+    op.execute(
+        """
+        ALTER TABLE publication_campaigns
+          ADD COLUMN IF NOT EXISTS campaign_kind VARCHAR(32) NOT NULL DEFAULT 'listing'
+        """
     )
-    op.add_column(
-        "publication_campaigns",
-        sa.Column("title", sa.String(length=255), nullable=True),
+    op.execute(
+        """
+        ALTER TABLE publication_campaigns
+          ADD COLUMN IF NOT EXISTS title VARCHAR(255)
+        """
     )
-    op.add_column(
-        "publication_campaigns",
-        sa.Column("body", sa.Text(), nullable=True),
+    op.execute(
+        """
+        ALTER TABLE publication_campaigns
+          ADD COLUMN IF NOT EXISTS body TEXT
+        """
     )
-    op.add_column(
-        "publication_campaigns",
-        sa.Column("media_urls", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    op.execute(
+        """
+        ALTER TABLE publication_campaigns
+          ADD COLUMN IF NOT EXISTS media_urls JSONB
+        """
     )
-
-    op.create_table(
-        "media_library_items",
-        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
-        sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("kind", sa.String(length=20), nullable=False, server_default="image"),
-        sa.Column("object_key", sa.String(length=512), nullable=False),
-        sa.Column("public_url", sa.String(length=1024), nullable=False),
-        sa.Column("mime_type", sa.String(length=100), nullable=True),
-        sa.Column("original_file_name", sa.String(length=255), nullable=True),
-        sa.Column("width", sa.Integer(), nullable=True),
-        sa.Column("height", sa.Integer(), nullable=True),
-        sa.Column("size_bytes", sa.Integer(), nullable=True),
-        sa.Column("duration_seconds", sa.Integer(), nullable=True),
-        sa.Column("created_by", postgresql.UUID(as_uuid=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.ForeignKeyConstraint(["created_by"], ["users.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS media_library_items (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          kind VARCHAR(20) NOT NULL DEFAULT 'image',
+          object_key VARCHAR(512) NOT NULL,
+          public_url VARCHAR(1024) NOT NULL,
+          mime_type VARCHAR(100),
+          original_file_name VARCHAR(255),
+          width INTEGER,
+          height INTEGER,
+          size_bytes INTEGER,
+          duration_seconds INTEGER,
+          created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
     )
-    op.create_index(
-        "ix_media_library_org_created",
-        "media_library_items",
-        ["organization_id", "created_at"],
+    op.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_media_library_org_created
+          ON media_library_items (organization_id, created_at)
+        """
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_media_library_org_created", table_name="media_library_items")
-    op.drop_table("media_library_items")
-    op.drop_column("publication_campaigns", "media_urls")
-    op.drop_column("publication_campaigns", "body")
-    op.drop_column("publication_campaigns", "title")
-    op.drop_column("publication_campaigns", "campaign_kind")
-    op.alter_column(
-        "publication_campaigns",
-        "listing_id",
-        existing_type=postgresql.UUID(as_uuid=True),
-        nullable=False,
-    )
+    op.execute("DROP INDEX IF EXISTS ix_media_library_org_created")
+    op.execute("DROP TABLE IF EXISTS media_library_items")
+    op.execute("ALTER TABLE publication_campaigns DROP COLUMN IF EXISTS media_urls")
+    op.execute("ALTER TABLE publication_campaigns DROP COLUMN IF EXISTS body")
+    op.execute("ALTER TABLE publication_campaigns DROP COLUMN IF EXISTS title")
+    op.execute("ALTER TABLE publication_campaigns DROP COLUMN IF EXISTS campaign_kind")
+    # Do not re-add NOT NULL on listing_id if quick posts already exist
