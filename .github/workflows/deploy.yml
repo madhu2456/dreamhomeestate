@@ -157,24 +157,41 @@ jobs:
             ./deploy.sh --update
 
             echo "Waiting for health on :${APP_PORT}..."
+            WEB_OK=0
             for i in $(seq 1 50); do
-              if curl -fsS "http://127.0.0.1:${APP_PORT}/" >/dev/null 2>&1; then
-                echo "Web healthy."
+              # Do not use curl -f here: some pages may return non-2xx briefly
+              CODE="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${APP_PORT}/" 2>/dev/null || echo 000)"
+              if [ "${CODE}" = "200" ] || [ "${CODE}" = "301" ] || [ "${CODE}" = "302" ] || [ "${CODE}" = "307" ] || [ "${CODE}" = "308" ]; then
+                echo "Web healthy (HTTP ${CODE})."
+                WEB_OK=1
                 break
               fi
+              echo "  wait ${i}/50 web status=${CODE}"
               if [ "$i" -eq 50 ]; then
                 echo "Health check timed out:"
+                docker compose -f docker-compose.prod.yml ps || true
                 docker compose -f docker-compose.prod.yml logs --tail=120 || true
                 exit 1
               fi
               sleep 3
             done
 
-            if curl -fsS "http://127.0.0.1:${APP_PORT}/api/v1/health" >/dev/null 2>&1; then
-              echo "API healthy via Next rewrite."
+            # API is internal; verify via container (rewrite path is best-effort only)
+            if docker compose -f docker-compose.prod.yml exec -T api curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/health | grep -q 200; then
+              echo "API healthy (container)."
             else
-              echo "Note: /api/v1/health via web proxy may require API_INTERNAL_URL; checking container..."
-              docker compose -f docker-compose.prod.yml exec -T api curl -fsS http://127.0.0.1:8000/api/v1/health || true
+              echo "WARNING: API container health check did not return 200"
+              docker compose -f docker-compose.prod.yml logs --tail=40 api || true
+              # Do not fail the whole deploy if web is up and earlier step already saw API healthy
+            fi
+
+            REWRITE_CODE="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${APP_PORT}/api/v1/health" 2>/dev/null || echo 000)"
+            echo "Next /api rewrite status: ${REWRITE_CODE} (informational)"
+
+            if [ "${WEB_OK}" != "1" ]; then
+              echo "ERROR: web never became healthy"
+              exit 1
             fi
 
             echo "Deploy complete → https://${DOMAIN}"
+            exit 0
