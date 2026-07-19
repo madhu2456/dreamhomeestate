@@ -30,7 +30,30 @@ chmod +x deploy.sh
 sudo DOMAIN=$DOMAIN APP_DIR=$APP_DIR REPO_URL=$REPO_URL ./deploy.sh
 ```
 
-This installs Docker (if needed), creates `.env`, builds `docker-compose.prod.yml`, runs migrations, and installs nginx.
+This installs Docker (if needed), creates `.env`, builds `docker-compose.prod.yml`, **runs Alembic migrations**, and installs nginx.
+
+### Database migrations (every deploy)
+
+Migrations are applied automatically in **two** places:
+
+1. **`deploy.sh` / GitHub Actions** — after Postgres is healthy, before the full app stack is considered ready:
+   ```bash
+   docker compose -f docker-compose.prod.yml run --rm --no-deps api alembic upgrade head
+   ```
+2. **API container entrypoint** — every time the API starts (`uvicorn`), it waits for Postgres then runs:
+   ```bash
+   alembic upgrade head
+   ```
+
+Workers and Celery beat use the same image but do **not** re-run migrations (only `uvicorn` does).
+
+Manual one-off (if you ever need it):
+
+```bash
+cd /opt/dreamhomeestate
+docker compose -f docker-compose.prod.yml exec api alembic upgrade head
+docker compose -f docker-compose.prod.yml exec api alembic current
+```
 
 ### SSL
 

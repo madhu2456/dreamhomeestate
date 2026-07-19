@@ -304,6 +304,51 @@ pull_or_clone() {
   fi
 }
 
+wait_for_service_healthy() {
+  local service="$1"
+  local attempts="${2:-40}"
+  local i cid health
+  for i in $(seq 1 "${attempts}"); do
+    cid="$(${COMPOSE} ps -q "${service}" 2>/dev/null | head -1)"
+    if [ -z "${cid}" ]; then
+      health="missing"
+    else
+      health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${cid}" 2>/dev/null || echo missing)"
+    fi
+    if [ "${health}" = "healthy" ] || [ "${health}" = "running" ]; then
+      echo "  ${service} is ${health}."
+      return 0
+    fi
+    if [ "$i" -eq "${attempts}" ]; then
+      echo "  ERROR: ${service} not healthy (last=${health})"
+      ${COMPOSE} ps || true
+      ${COMPOSE} logs --tail=60 "${service}" || true
+      return 1
+    fi
+    sleep 3
+  done
+}
+
+run_migrations() {
+  echo "=== Database migrations (alembic upgrade head) ==="
+  # Prefer one-shot migrate against the built API image so schema is ready
+  # before web/worker depend on the API, and even if the long-running API
+  # container is still starting.
+  if ! ${COMPOSE} run --rm --no-deps api alembic upgrade head; then
+    echo "  compose run migrate failed — trying exec on running api..."
+    if ! ${COMPOSE} exec -T api alembic upgrade head; then
+      echo "  ERROR: migrations failed"
+      ${COMPOSE} logs --tail=100 api || true
+      return 1
+    fi
+  fi
+  echo "  alembic current:"
+  ${COMPOSE} run --rm --no-deps api alembic current 2>/dev/null \
+    || ${COMPOSE} exec -T api alembic current 2>/dev/null \
+    || true
+  echo "  Migrations OK."
+}
+
 compose_up() {
   cd "${APP_DIR}"
   echo "Building and starting production stack..."
@@ -324,15 +369,32 @@ compose_up() {
   fi
 
   ${COMPOSE} pull 2>/dev/null || true
-  ${COMPOSE} up -d --build --remove-orphans --force-recreate
+
+  echo "Building images..."
+  ${COMPOSE} build api web worker beat
+
+  echo "Starting data plane (postgres, redis, minio)..."
+  ${COMPOSE} up -d postgres redis minio
+  wait_for_service_healthy postgres 40 || exit 1
+  wait_for_service_healthy redis 30 || exit 1
+  wait_for_service_healthy minio 30 || true
+  ${COMPOSE} up -d createbuckets
+  # createbuckets is a one-shot job
+  sleep 3
+
+  # Migrations MUST run before app traffic / quick-posts / media library
+  run_migrations || exit 1
+
+  echo "Starting application services..."
+  ${COMPOSE} up -d --remove-orphans --force-recreate api worker beat web
 
   echo "Waiting for API health..."
-  for i in $(seq 1 40); do
+  for i in $(seq 1 50); do
     if ${COMPOSE} exec -T api curl -fsS http://127.0.0.1:8000/api/v1/health >/dev/null 2>&1; then
       echo "  API healthy."
       break
     fi
-    if [ "$i" -eq 40 ]; then
+    if [ "$i" -eq 50 ]; then
       echo "  API health timeout — dumping logs"
       ${COMPOSE} logs --tail=120 api || true
       exit 1
@@ -340,17 +402,12 @@ compose_up() {
     sleep 3
   done
 
-  echo "Running database migrations (also runs on API entrypoint)..."
-  if ! ${COMPOSE} exec -T api alembic upgrade head; then
-    echo "  Migration failed — dumping API logs"
-    ${COMPOSE} logs --tail=80 api || true
-    exit 1
-  fi
-  echo "  Migrations OK."
+  # Belt-and-suspenders: migrate again after API is up (no-op if already at head)
+  run_migrations || exit 1
 
   echo "Container status:"
   ${COMPOSE} ps
-  ${COMPOSE} logs --tail=40 || true
+  ${COMPOSE} logs --tail=40 api || true
 }
 
 fix_ownership() {

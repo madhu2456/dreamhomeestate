@@ -154,7 +154,11 @@ jobs:
             export APP_DIR DOMAIN APP_PORT MINIO_PORT REPO_URL
             export BRANCH=main
             export DEPLOY_USER="${ME}"
+            # deploy.sh --update: build, start data plane, alembic upgrade head, start app
             ./deploy.sh --update
+
+            echo "Confirm alembic head after deploy..."
+            docker compose -f docker-compose.prod.yml exec -T api alembic current || true
 
             echo "Waiting for health on :${APP_PORT}..."
             WEB_OK=0
