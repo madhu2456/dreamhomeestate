@@ -23,6 +23,7 @@ DOMAIN="${DOMAIN:-dreamhomeestate.madhudadi.in}"
 # Host port only (container uses 3000). Avoid clashes with other apps on this host.
 # madhudadi.in=3000, blog=3001, deals=3002 → use 3010 for Dream Home Estate
 APP_PORT="${APP_PORT:-3010}"
+API_PORT="${API_PORT:-8010}"
 MINIO_PORT="${MINIO_PORT:-9010}"
 APP_DIR="${APP_DIR:-/opt/dreamhomeestate}"
 COMPOSE="docker compose -f docker-compose.prod.yml"
@@ -36,6 +37,7 @@ echo "=== Dream Home Estate deployment (${MODE}) ==="
 echo "    APP_DIR=${APP_DIR}"
 echo "    DOMAIN=${DOMAIN}"
 echo "    APP_PORT=${APP_PORT}"
+echo "    API_PORT=${API_PORT}"
 echo "    BRANCH=${BRANCH}"
 echo "    USER=$(whoami) (target deploy user: ${DEPLOY_USER})"
 
@@ -148,6 +150,7 @@ AUTO_PUBLISH_WITHOUT_REVIEW=false
 WATERMARKING=false
 
 APP_PORT=${APP_PORT}
+API_PORT=${API_PORT}
 MINIO_PORT=${MINIO_PORT}
 NEXT_PUBLIC_API_URL=
 API_INTERNAL_URL=http://api:8000
@@ -161,6 +164,7 @@ EOF
   else
     echo ".env already exists — syncing ports / domain-related keys"
     set_env_kv APP_PORT "${APP_PORT}"
+    set_env_kv API_PORT "${API_PORT}"
     set_env_kv MINIO_PORT "${MINIO_PORT}"
     set_env_kv LIVE_DOMAIN "https://${DOMAIN}"
     set_env_kv S3_PUBLIC_URL "https://${DOMAIN}/media"
@@ -204,12 +208,13 @@ install_nginx_from_repo() {
     return 0
   fi
 
-  echo "Installing Nginx site → ${dest} (app :${APP_PORT}, minio :${MINIO_PORT})"
+  echo "Installing Nginx site → ${dest} (web :${APP_PORT}, api :${API_PORT}, minio :${MINIO_PORT})"
 
   if [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ] && [ -f "${ssl_src}" ]; then
     echo "  Using SSL template (certs found for ${DOMAIN})"
     sed -e "s/__DOMAIN__/${DOMAIN}/g" \
         -e "s/__APP_PORT__/${APP_PORT}/g" \
+        -e "s/__API_PORT__/${API_PORT}/g" \
         -e "s/__MINIO_PORT__/${MINIO_PORT}/g" \
         "${ssl_src}" >"${tmp}"
     if [ ! -f /etc/letsencrypt/ssl-dhparams.pem ]; then
@@ -222,6 +227,7 @@ install_nginx_from_repo() {
     echo "  Using HTTP template"
     sed -e "s/__DOMAIN__/${DOMAIN}/g" \
         -e "s/__APP_PORT__/${APP_PORT}/g" \
+        -e "s/__API_PORT__/${API_PORT}/g" \
         -e "s/__MINIO_PORT__/${MINIO_PORT}/g" \
         "${http_src}" >"${tmp}"
   fi

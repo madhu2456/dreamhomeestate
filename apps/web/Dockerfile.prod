@@ -12,8 +12,12 @@ RUN pnpm install --frozen-lockfile || pnpm install
 COPY apps/web .
 RUN mkdir -p public
 
+# Rewrites are evaluated at build time — must point at the docker-compose
+# service name, not localhost (localhost inside the web container is itself).
 ARG NEXT_PUBLIC_API_URL=
+ARG API_INTERNAL_URL=http://api:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV API_INTERNAL_URL=$API_INTERNAL_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 

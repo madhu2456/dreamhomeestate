@@ -64,7 +64,9 @@ async def login(
     session_repo = SessionRepository(db)
     org_repo = OrganizationRepository(db)
 
-    user = await user_repo.get_by_email(body.email)
+    # Normalize email the same way create() does (lower + strip)
+    email = body.email.lower().strip()
+    user = await user_repo.get_by_email(email)
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

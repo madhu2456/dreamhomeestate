@@ -61,14 +61,22 @@ function LoginFormInner() {
       });
 
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = await res.json().catch(() => ({} as Record<string, unknown>));
         const detail = body.detail;
-        const message =
+        let message =
           typeof detail === 'string'
             ? detail
             : Array.isArray(detail)
               ? detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join(', ')
-              : body.message ?? 'Invalid email or password';
+              : typeof body.message === 'string'
+                ? body.message
+                : '';
+        if (!message) {
+          message =
+            res.status >= 500
+              ? 'Sign-in is temporarily unavailable. Please try again in a moment.'
+              : 'Invalid email or password';
+        }
         throw new Error(message);
       }
 
