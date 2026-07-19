@@ -350,9 +350,21 @@ if [ "${MODE}" = "update" ]; then
   echo "    Running non-root update as $(whoami)..."
   need_docker
 
+  # First deploy: create/clone app dir if missing
   if [ ! -d "${APP_DIR}/.git" ]; then
-    echo "App not found at ${APP_DIR}."
-    exit 1
+    echo "App not found at ${APP_DIR} — cloning ${REPO_URL}..."
+    if [ ! -d "${APP_DIR}" ]; then
+      if ! mkdir -p "${APP_DIR}" 2>/dev/null; then
+        if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+          sudo mkdir -p "${APP_DIR}"
+          sudo chown -R "$(whoami):$(whoami)" "${APP_DIR}"
+        else
+          echo "Cannot create ${APP_DIR}. As root once:"
+          echo "  mkdir -p ${APP_DIR} && chown -R $(whoami):$(whoami) ${APP_DIR}"
+          exit 1
+        fi
+      fi
+    fi
   fi
 
   if [ ! -w "${APP_DIR}" ]; then

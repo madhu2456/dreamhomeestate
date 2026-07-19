@@ -83,37 +83,77 @@ jobs:
             DOMAIN=dreamhomeestate.madhudadi.in
             APP_PORT=3010
             MINIO_PORT=9010
+            REPO_URL=https://github.com/madhu2456/dreamhomeestate.git
+            ME="$(whoami)"
 
-            echo "User=$(whoami) APP_DIR=${APP_DIR} DOMAIN=${DOMAIN}"
+            echo "User=${ME} APP_DIR=${APP_DIR} DOMAIN=${DOMAIN}"
 
-            if [ ! -d "${APP_DIR}/.git" ]; then
-              echo "ERROR: App not found at ${APP_DIR}."
-              echo "Bootstrap once as root on the server:"
-              echo "  git clone <repo-url> ${APP_DIR}"
-              echo "  cd ${APP_DIR} && chmod +x deploy.sh"
-              echo "  sudo DOMAIN=${DOMAIN} APP_DIR=${APP_DIR} ./deploy.sh"
-              exit 1
+            # Ensure app directory exists and is owned by deploy user
+            if [ ! -d "${APP_DIR}" ]; then
+              echo "App dir missing — creating ${APP_DIR}..."
+              if mkdir -p "${APP_DIR}" 2>/dev/null; then
+                :
+              elif command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
+                sudo mkdir -p "${APP_DIR}"
+                sudo chown -R "${ME}:${ME}" "${APP_DIR}"
+              else
+                echo "ERROR: cannot create ${APP_DIR}."
+                echo "SSH as root once and run:"
+                echo "  mkdir -p ${APP_DIR} && chown -R ${ME}:${ME} ${APP_DIR}"
+                echo "  usermod -aG docker ${ME}"
+                exit 1
+              fi
             fi
 
-            cd "${APP_DIR}"
-
             if command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
-              echo "Ensuring ${APP_DIR} is owned by $(whoami)..."
-              sudo chown -R "$(whoami):$(whoami)" "${APP_DIR}" || true
+              sudo chown -R "${ME}:${ME}" "${APP_DIR}" || true
             fi
 
             git config --global --add safe.directory "${APP_DIR}" || true
 
+            if [ ! -d "${APP_DIR}/.git" ]; then
+              echo "No git checkout — cloning ${REPO_URL}..."
+              # Clone into empty/new dir (preserve .env if any)
+              if [ -f "${APP_DIR}/.env" ]; then
+                cp "${APP_DIR}/.env" /tmp/dhe.env.bak
+              fi
+              # If dir has leftover files, clone to temp
+              if [ -n "$(ls -A "${APP_DIR}" 2>/dev/null | grep -v '^\.env$' || true)" ]; then
+                TMP="$(mktemp -d)"
+                git clone --branch main "${REPO_URL}" "${TMP}"
+                if [ -f /tmp/dhe.env.bak ]; then cp /tmp/dhe.env.bak "${TMP}/.env"; fi
+                find "${APP_DIR}" -mindepth 1 -maxdepth 1 ! -name '.env' -exec rm -rf {} +
+                # shellcheck disable=SC2086
+                cp -a "${TMP}/." "${APP_DIR}/"
+                rm -rf "${TMP}"
+              else
+                rmdir "${APP_DIR}" 2>/dev/null || true
+                git clone --branch main "${REPO_URL}" "${APP_DIR}"
+                if [ -f /tmp/dhe.env.bak ]; then cp /tmp/dhe.env.bak "${APP_DIR}/.env"; fi
+              fi
+              rm -f /tmp/dhe.env.bak
+            fi
+
+            cd "${APP_DIR}"
+
             echo "Syncing to origin/main..."
+            git remote set-url origin "${REPO_URL}" || true
             git fetch origin
             git checkout main
             git reset --hard origin/main
             git clean -fd -e .env
             chmod +x deploy.sh 2>/dev/null || true
 
-            export APP_DIR DOMAIN APP_PORT MINIO_PORT
+            # Docker group check
+            if ! docker info >/dev/null 2>&1; then
+              echo "ERROR: cannot talk to Docker as ${ME}."
+              echo "As root once: usermod -aG docker ${ME}  # then re-login"
+              exit 1
+            fi
+
+            export APP_DIR DOMAIN APP_PORT MINIO_PORT REPO_URL
             export BRANCH=main
-            export DEPLOY_USER="$(whoami)"
+            export DEPLOY_USER="${ME}"
             ./deploy.sh --update
 
             echo "Waiting for health on :${APP_PORT}..."
