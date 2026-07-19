@@ -126,7 +126,7 @@ class RateLimitMiddleware:
         dev_mode = current.is_development
 
         try:
-            r = aioredis.from_url(settings.redis_url, decode_responses=True)
+            r = aioredis.from_url(current.redis_url, decode_responses=True)
             count = await r.incr(key)
             if count == 1:
                 await r.expire(key, window)
