@@ -129,13 +129,19 @@ async def connect_social_account(
                 "code_verifier": code_verifier,
             },
         )
-        # Instagram API with Instagram Login — content publishing scopes
+        # Instagram API with Instagram Login — match Meta app product scopes
         params = {
             "client_id": settings.instagram_app_id,
             "redirect_uri": settings.instagram_redirect_uri,
-            "scope": "instagram_business_basic,instagram_business_content_publish",
+            "scope": (
+                "instagram_business_basic,"
+                "instagram_business_content_publish,"
+                "instagram_business_manage_comments,"
+                "instagram_business_manage_insights"
+            ),
             "response_type": "code",
             "state": state,
+            "force_reauth": "true",
         }
         auth_url = f"https://www.instagram.com/oauth/authorize?{urlencode(params)}"
         return OAuthConnectResponse(authorization_url=auth_url, mock=False)
