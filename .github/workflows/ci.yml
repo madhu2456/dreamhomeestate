@@ -76,12 +76,25 @@ jobs:
           restore-keys: |
             pip-${{ runner.os }}-
 
+      - name: Prepare CI .env
+        run: |
+          cp .env.example .env
+          # Ensure Fernet key is valid for encryption tests
+          sed -i 's|^OAUTH_ENCRYPTION_KEY=.*|OAUTH_ENCRYPTION_KEY=E14MeR_CCL3_Z1DPIjLdwyKaesR31uBoRFNFregVs-A=|' .env
+          sed -i 's|^SECRET_KEY=.*|SECRET_KEY=test-secret-key-minimum-32-chars-long-ci|' .env
+          sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/realestate|' .env
+          sed -i 's|^REDIS_URL=.*|REDIS_URL=redis://localhost:6379/0|' .env
+          sed -i 's|^S3_ENDPOINT=.*|S3_ENDPOINT=http://localhost:9000|' .env
+
       - name: Start services
         run: |
           docker compose up -d postgres redis minio createbuckets
-          # Wait for services to be healthy
-          timeout 30 bash -c 'until docker compose exec -T postgres pg_isready -U postgres; do sleep 1; done'
-          timeout 30 bash -c 'until docker compose exec -T redis redis-cli ping; do sleep 1; done'
+          # Wait for services to be healthy (pull + boot can exceed 30s)
+          timeout 90 bash -c 'until docker compose exec -T postgres pg_isready -U postgres; do sleep 2; done'
+          timeout 90 bash -c 'until docker compose exec -T redis redis-cli ping | grep -q PONG; do sleep 2; done'
+          timeout 90 bash -c 'until curl -fsS http://localhost:9000/minio/health/live; do sleep 2; done'
+          # createbuckets is a one-shot job
+          docker compose ps createbuckets || true
 
       - name: Install deps
         run: |
@@ -95,8 +108,8 @@ jobs:
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/realestate
           REDIS_URL: redis://localhost:6379/0
-          SECRET_KEY: test-secret-key-minimum-32-chars-long
-          OAUTH_ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1jaGFycw==
+          SECRET_KEY: test-secret-key-minimum-32-chars-long-ci
+          OAUTH_ENCRYPTION_KEY: E14MeR_CCL3_Z1DPIjLdwyKaesR31uBoRFNFregVs-A=
           S3_ENDPOINT: http://localhost:9000
           S3_ACCESS_KEY: minioadmin
           S3_SECRET_KEY: minioadmin
