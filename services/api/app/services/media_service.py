@@ -248,8 +248,6 @@ async def upload_library_image(
     mime_type: str,
 ) -> tuple[str, str, int]:
     """Upload a library image; return (object_key, public_url, size_bytes)."""
-    import asyncio
-
     # Also store an Instagram-sized variant for posters
     try:
         img = Image.open(io.BytesIO(file_bytes))
