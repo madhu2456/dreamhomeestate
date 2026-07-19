@@ -7,6 +7,7 @@ validation is performed on every request.
 
 import structlog
 from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import PlainTextResponse
 
 from app.config import get_settings
 from app.schemas.webhook import WebhookResponse
@@ -25,33 +26,21 @@ router = APIRouter(tags=["webhooks"])
 # ──────────────────────── Instagram webhook ────────────────────────
 
 
-@router.api_route(
+@router.get(
     "/api/v1/webhooks/instagram",
-    methods=["GET", "POST"],
-    response_model=WebhookResponse,
-    summary="Instagram webhook receiver",
+    summary="Instagram webhook verification (Meta hub.challenge)",
+    response_class=PlainTextResponse,
 )
-async def instagram_webhook(request: Request) -> str | WebhookResponse:
-    """Receive Instagram webhook events and handle initial verification.
+async def instagram_webhook_verify(request: Request) -> PlainTextResponse:
+    """Meta webhook subscription check.
 
-    GET  — Verification: Instagram sends hub.mode, hub.challenge, hub.verify_token.
-           Must confirm verify_token matches our configured value and echo back hub.challenge.
-
-    POST — Event delivery: Instagram sends JSON body. Validate the X-Hub-Signature-256
-           header using HMAC-SHA256 with the configured app secret.
+    Meta sends hub.mode, hub.challenge, hub.verify_token.
+    Must return hub.challenge as **plain text** (not JSON) when the token matches.
     """
-    if request.method == "GET":
-        return await _instagram_verify(request)
-    return await _instagram_event(request)
-
-
-async def _instagram_verify(request: Request) -> str:
-    """Handle Instagram's initial webhook verification (GET request)."""
     hub_mode = request.query_params.get("hub.mode")
     hub_challenge = request.query_params.get("hub.challenge")
     hub_verify_token = request.query_params.get("hub.verify_token")
 
-    # Instagram sends hub.mode=subscribe when verifying
     if hub_mode != "subscribe":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -64,7 +53,9 @@ async def _instagram_verify(request: Request) -> str:
             detail="Missing hub.challenge",
         )
 
-    expected_token = settings.instagram_webhook_verify_token
+    expected_token = (settings.instagram_webhook_verify_token or "").strip()
+    provided_token = (hub_verify_token or "").strip()
+
     if not expected_token:
         logger.warning("instagram_webhook_verify_token_not_configured")
         raise HTTPException(
@@ -72,10 +63,11 @@ async def _instagram_verify(request: Request) -> str:
             detail="Webhook verification not configured",
         )
 
-    if not hub_verify_token or hub_verify_token != expected_token:
+    if not provided_token or provided_token != expected_token:
         logger.warning(
             "instagram_webhook_verify_token_mismatch",
-            provided=hub_verify_token,
+            provided_len=len(provided_token),
+            expected_len=len(expected_token),
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -83,13 +75,18 @@ async def _instagram_verify(request: Request) -> str:
         )
 
     logger.info("instagram_webhook_verified")
-    # Must return exactly the hub.challenge value as the response body (plain text)
-    return hub_challenge
+    # Meta requires the raw challenge string as the body, content-type text/plain
+    return PlainTextResponse(content=hub_challenge, status_code=200)
 
 
-async def _instagram_event(request: Request) -> WebhookResponse:
-    """Handle an Instagram webhook event (POST request)."""
-    secret = settings.instagram_webhook_secret
+@router.post(
+    "/api/v1/webhooks/instagram",
+    response_model=WebhookResponse,
+    summary="Instagram webhook event receiver",
+)
+async def instagram_webhook_event(request: Request) -> WebhookResponse:
+    """Receive Instagram webhook events. Validate X-Hub-Signature-256."""
+    secret = settings.instagram_webhook_secret or settings.instagram_app_secret
     if not secret:
         logger.warning("instagram_webhook_secret_not_configured")
         raise HTTPException(
@@ -110,9 +107,10 @@ async def _instagram_event(request: Request) -> WebhookResponse:
             detail="Invalid signature",
         )
 
-    # Read JSON once for logging (body is already consumed as bytes for sig check)
     try:
-        payload = await request.json()
+        import json
+
+        payload = json.loads(body) if body else None
     except Exception:
         payload = None
 
@@ -127,28 +125,12 @@ async def _instagram_event(request: Request) -> WebhookResponse:
 # ──────────────────────── X / Twitter webhook ──────────────────────
 
 
-@router.api_route(
+@router.get(
     "/api/v1/webhooks/x",
-    methods=["GET", "POST"],
-    response_model=WebhookResponse,
-    summary="X (Twitter) webhook receiver",
+    summary="X (Twitter) webhook CRC verification",
 )
-async def x_webhook(request: Request) -> dict | WebhookResponse:
-    """Receive X/Twitter webhook events and handle CRC (Challenge-Response Check).
-
-    GET  — CRC: X sends ?crc_token=... and expects a JSON response
-           {"response_token": "sha256=..."} containing an HMAC-SHA256 base64 signature.
-
-    POST — Event delivery: X sends JSON body. Validate the x-twitter-webhooks-signature
-           header using HMAC-SHA256 (base64-encoded).
-    """
-    if request.method == "GET":
-        return await _x_crc(request)
-    return await _x_event(request)
-
-
-async def _x_crc(request: Request) -> dict:
-    """Handle X/Twitter CRC (Challenge-Response Check) for webhook registration."""
+async def x_webhook_crc(request: Request) -> dict:
+    """X Account Activity CRC: return {"response_token": "sha256=..."}."""
     crc_token = request.query_params.get("crc_token")
     if not crc_token:
         raise HTTPException(
@@ -165,13 +147,17 @@ async def _x_crc(request: Request) -> dict:
         )
 
     response_token = generate_challenge_response(crc_token, secret)
-
     logger.info("x_webhook_crc_completed")
     return {"response_token": response_token}
 
 
-async def _x_event(request: Request) -> WebhookResponse:
-    """Handle an X/Twitter webhook event (POST request)."""
+@router.post(
+    "/api/v1/webhooks/x",
+    response_model=WebhookResponse,
+    summary="X (Twitter) webhook event receiver",
+)
+async def x_webhook_event(request: Request) -> WebhookResponse:
+    """Receive X webhook events. Validate x-twitter-webhooks-signature."""
     secret = settings.x_webhook_secret
     if not secret:
         logger.warning("x_webhook_secret_not_configured")
@@ -194,7 +180,9 @@ async def _x_event(request: Request) -> WebhookResponse:
         )
 
     try:
-        payload = await request.json()
+        import json
+
+        payload = json.loads(body) if body else None
     except Exception:
         payload = None
 

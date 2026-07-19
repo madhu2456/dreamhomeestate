@@ -135,6 +135,10 @@ OAUTH_ENCRYPTION_KEY=${OAUTH_KEY}
 INSTAGRAM_APP_ID=
 INSTAGRAM_APP_SECRET=
 INSTAGRAM_REDIRECT_URI=https://${DOMAIN}/api/v1/social-accounts/instagram/callback
+# Invent any secret string; must match Meta "Verify Token" exactly
+INSTAGRAM_WEBHOOK_VERIFY_TOKEN=$(openssl rand -hex 16)
+# App Secret (same as INSTAGRAM_APP_SECRET) used for X-Hub-Signature-256
+INSTAGRAM_WEBHOOK_SECRET=
 
 X_CLIENT_ID=
 X_CLIENT_SECRET=
@@ -146,7 +150,7 @@ AI_CONTENT_ASSISTANCE=false
 VIDEO_PUBLISHING=false
 SCHEDULING=true
 ANALYTICS_COLLECTION=false
-WEBHOOKS=false
+WEBHOOKS=true
 AUTO_PUBLISH_WITHOUT_REVIEW=false
 WATERMARKING=false
 
