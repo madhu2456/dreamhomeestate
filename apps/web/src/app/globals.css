@@ -1,0 +1,141 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Dream Home Estate — cool architectural paper + ink + copper */
+    --background: 40 33% 97%;
+    --foreground: 210 40% 8%;
+    --card: 0 0% 100%;
+    --card-foreground: 210 40% 8%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 40% 8%;
+    --primary: 210 52% 12%;
+    --primary-foreground: 40 33% 97%;
+    --secondary: 200 18% 92%;
+    --secondary-foreground: 210 40% 12%;
+    --muted: 40 20% 94%;
+    --muted-foreground: 210 12% 40%;
+    --accent: 24 58% 48%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 16% 88%;
+    --input: 210 16% 88%;
+    --ring: 24 58% 48%;
+    --radius: 0.75rem;
+    --success: 160 50% 32%;
+    --ink: 210 52% 12%;
+    --paper: 40 33% 97%;
+    --copper: 24 58% 48%;
+    --mist: 200 25% 94%;
+  }
+
+  .dark {
+    --background: 210 40% 6%;
+    --foreground: 40 20% 96%;
+    --card: 210 36% 9%;
+    --card-foreground: 40 20% 96%;
+    --popover: 210 36% 9%;
+    --popover-foreground: 40 20% 96%;
+    --primary: 40 20% 96%;
+    --primary-foreground: 210 40% 8%;
+    --secondary: 210 24% 16%;
+    --secondary-foreground: 40 20% 96%;
+    --muted: 210 24% 14%;
+    --muted-foreground: 210 12% 65%;
+    --accent: 24 58% 52%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 20% 18%;
+    --input: 210 20% 18%;
+    --ring: 24 58% 52%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "ss01" on, "cv11" on;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display), Georgia, serif;
+    letter-spacing: -0.02em;
+  }
+
+  .font-display {
+    font-family: var(--font-display), Georgia, serif;
+  }
+
+  ::selection {
+    background: hsl(var(--accent) / 0.25);
+    color: hsl(var(--foreground));
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .surface-grid {
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.55) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.55) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+
+  .ink-gradient {
+    background:
+      radial-gradient(1200px 500px at 10% -10%, hsl(var(--accent) / 0.14), transparent 55%),
+      radial-gradient(900px 400px at 90% 0%, hsl(210 52% 20% / 0.08), transparent 50%),
+      hsl(var(--background));
+  }
+
+  .glass-panel {
+    @apply border border-white/40 bg-white/70 shadow-sm backdrop-blur-md;
+  }
+
+  .section-pad {
+    @apply px-4 py-16 sm:px-6 sm:py-20 lg:px-8 lg:py-24;
+  }
+
+  .container-page {
+    @apply mx-auto w-full max-w-6xl;
+  }
+
+  .container-wide {
+    @apply mx-auto w-full max-w-7xl;
+  }
+
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

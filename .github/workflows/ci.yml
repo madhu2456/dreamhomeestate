@@ -1,0 +1,187 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('services/api/requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
+
+      - name: Cache pnpm
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pnpm-store
+            apps/web/node_modules
+          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/web/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: Install Python deps
+        run: pip install ruff
+
+      - name: Install Node deps
+        run: |
+          cd apps/web
+          pnpm install --frozen-lockfile
+
+      - name: Lint backend (ruff)
+        run: ruff check services/api
+
+      - name: Lint frontend (next lint)
+        run: |
+          cd apps/web
+          npx next lint
+
+  test-api:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('services/api/requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
+
+      - name: Start services
+        run: |
+          docker compose up -d postgres redis minio createbuckets
+          # Wait for services to be healthy
+          timeout 30 bash -c 'until docker compose exec -T postgres pg_isready -U postgres; do sleep 1; done'
+          timeout 30 bash -c 'until docker compose exec -T redis redis-cli ping; do sleep 1; done'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e packages/config
+          pip install -r services/api/requirements.txt
+
+      - name: Run tests
+        run: |
+          pytest -c services/api/pyproject.toml
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/realestate
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-minimum-32-chars-long
+          OAUTH_ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1jaGFycw==
+          S3_ENDPOINT: http://localhost:9000
+          S3_ACCESS_KEY: minioadmin
+          S3_SECRET_KEY: minioadmin
+          S3_BUCKET_NAME: realestate-media
+          S3_REGION: us-east-1
+          S3_PUBLIC_URL: http://localhost:9000/realestate-media
+          S3_USE_SSL: "false"
+          INSTAGRAM_APP_ID: ""
+          INSTAGRAM_APP_SECRET: ""
+          X_CLIENT_ID: ""
+          X_CLIENT_SECRET: ""
+
+      - name: Stop services
+        if: always()
+        run: docker compose down -v
+
+  test-web:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Cache pnpm
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pnpm-store
+            apps/web/node_modules
+          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/web/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: Install deps
+        run: |
+          cd apps/web
+          pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: |
+          cd apps/web
+          npx tsc --noEmit
+
+      - name: Lint
+        run: |
+          cd apps/web
+          npx next lint
+
+  build:
+    needs: [test-api, test-web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Cache pnpm
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pnpm-store
+            apps/web/node_modules
+          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/web/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: Install deps
+        run: |
+          cd apps/web
+          pnpm install --frozen-lockfile
+
+      - name: Build Next.js
+        run: |
+          cd apps/web
+          pnpm build

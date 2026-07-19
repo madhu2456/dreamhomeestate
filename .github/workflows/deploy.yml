@@ -1,0 +1,140 @@
+# Deploy Dream Home Estate as non-root user "madhu" to /opt/dreamhomeestate.
+#
+# Required GitHub secrets:
+#   DEPLOY_HOST     — server IP / hostname
+#   DEPLOY_USER     — madhu
+#   DEPLOY_SSH_KEY  — private key authorized for madhu
+#
+# Optional:
+#   DEPLOY_PORT     — SSH port (default 22)
+#   DEPLOY_PATH     — app dir (default /opt/dreamhomeestate)
+#   DEPLOY_SSH_PASSPHRASE
+
+name: Deploy Dream Home Estate
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dreamhomeestate
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check deploy secrets
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -e
+          missing=0
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::error::DEPLOY_HOST is missing."
+            missing=1
+          fi
+          if [ -z "$DEPLOY_USER" ]; then
+            echo "::error::DEPLOY_USER is missing. Set to: madhu"
+            missing=1
+          fi
+          if [ -z "$DEPLOY_SSH_KEY" ]; then
+            echo "::error::DEPLOY_SSH_KEY is missing (private key for madhu)."
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          if ! printf '%s' "$DEPLOY_SSH_KEY" | grep -q "BEGIN.*PRIVATE KEY"; then
+            echo "::error::DEPLOY_SSH_KEY must be a private key (BEGIN ... PRIVATE KEY)."
+            exit 1
+          fi
+          if ! printf '%s' "$DEPLOY_SSH_KEY" | grep -q "END.*PRIVATE KEY"; then
+            echo "::error::DEPLOY_SSH_KEY missing END line (truncated paste)."
+            exit 1
+          fi
+          echo "Secrets OK. host=${DEPLOY_HOST} user=${DEPLOY_USER}"
+
+      - name: Deploy over SSH as madhu
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE }}
+          script_stop: true
+          command_timeout: 40m
+          script: |
+            set -euo pipefail
+
+            APP_DIR="${{ secrets.DEPLOY_PATH }}"
+            if [ -z "${APP_DIR}" ]; then
+              APP_DIR=/opt/dreamhomeestate
+            fi
+            APP_DIR="${APP_DIR%/}"
+            DOMAIN=dreamhomeestate.madhudadi.in
+            APP_PORT=3010
+            MINIO_PORT=9010
+
+            echo "User=$(whoami) APP_DIR=${APP_DIR} DOMAIN=${DOMAIN}"
+
+            if [ ! -d "${APP_DIR}/.git" ]; then
+              echo "ERROR: App not found at ${APP_DIR}."
+              echo "Bootstrap once as root on the server:"
+              echo "  git clone <repo-url> ${APP_DIR}"
+              echo "  cd ${APP_DIR} && chmod +x deploy.sh"
+              echo "  sudo DOMAIN=${DOMAIN} APP_DIR=${APP_DIR} ./deploy.sh"
+              exit 1
+            fi
+
+            cd "${APP_DIR}"
+
+            if command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
+              echo "Ensuring ${APP_DIR} is owned by $(whoami)..."
+              sudo chown -R "$(whoami):$(whoami)" "${APP_DIR}" || true
+            fi
+
+            git config --global --add safe.directory "${APP_DIR}" || true
+
+            echo "Syncing to origin/main..."
+            git fetch origin
+            git checkout main
+            git reset --hard origin/main
+            git clean -fd -e .env
+            chmod +x deploy.sh 2>/dev/null || true
+
+            export APP_DIR DOMAIN APP_PORT MINIO_PORT
+            export BRANCH=main
+            export DEPLOY_USER="$(whoami)"
+            ./deploy.sh --update
+
+            echo "Waiting for health on :${APP_PORT}..."
+            for i in $(seq 1 50); do
+              if curl -fsS "http://127.0.0.1:${APP_PORT}/" >/dev/null 2>&1; then
+                echo "Web healthy."
+                break
+              fi
+              if [ "$i" -eq 50 ]; then
+                echo "Health check timed out:"
+                docker compose -f docker-compose.prod.yml logs --tail=120 || true
+                exit 1
+              fi
+              sleep 3
+            done
+
+            if curl -fsS "http://127.0.0.1:${APP_PORT}/api/v1/health" >/dev/null 2>&1; then
+              echo "API healthy via Next rewrite."
+            else
+              echo "Note: /api/v1/health via web proxy may require API_INTERNAL_URL; checking container..."
+              docker compose -f docker-compose.prod.yml exec -T api curl -fsS http://127.0.0.1:8000/api/v1/health || true
+            fi
+
+            echo "Deploy complete → https://${DOMAIN}"
