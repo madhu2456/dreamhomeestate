@@ -83,6 +83,16 @@ class SocialAccountRepository:
 
     async def update(self, account: SocialAccount, **kwargs) -> SocialAccount:
         for key, value in kwargs.items():
+            if key == "connection_status" and isinstance(value, str):
+                value = AccountConnectionStatus(value)
+            if key == "account_type" and isinstance(value, str):
+                from app.models import AccountType
+
+                try:
+                    value = AccountType(value.lower())
+                except ValueError:
+                    # Ignore unknown provider account types rather than 500
+                    continue
             setattr(account, key, value)
         await self.db.flush()
         await self.db.refresh(account)

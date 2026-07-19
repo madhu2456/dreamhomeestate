@@ -2,7 +2,7 @@
 
 import base64
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
@@ -18,6 +18,7 @@ from app.database import get_db
 from app.dependencies import CurrentUser, require_role
 from app.models import (
     AccountConnectionStatus,
+    AccountType,
     MembershipRole,
 )
 from app.repositories.encrypted_credentials import EncryptedCredentialsRepository
@@ -183,6 +184,29 @@ async def connect_social_account(
 # ──────────────────────── Global callback route ────────────────────
 
 
+def _map_instagram_account_type(raw: str | None) -> AccountType | None:
+    """Map Instagram Graph account_type values onto our enum."""
+    if not raw:
+        return None
+    key = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    mapping = {
+        "personal": AccountType.personal,
+        "business": AccountType.business,
+        "creator": AccountType.creator,
+        "media_creator": AccountType.creator,
+        "page": AccountType.page,
+    }
+    return mapping.get(key)
+
+
+def _normalize_scope(scope: Any) -> str:
+    if scope is None:
+        return ""
+    if isinstance(scope, list):
+        return ",".join(str(s) for s in scope)
+    return str(scope)
+
+
 @router.get(
     "/api/v1/social-accounts/{provider}/callback",
     response_model=None,
@@ -190,13 +214,47 @@ async def connect_social_account(
 )
 async def oauth_callback(
     provider: str,
-    code: str = Query(...),
-    state: str = Query(...),
-    request: Request = None,
-    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    code: str | None = Query(None),
+    state: str | None = Query(None),
+    error: str | None = Query(None),
+    error_description: str | None = Query(None),
 ) -> Any:
-    """Handle OAuth callback from Instagram or X, exchange code, store credentials."""
+    """Handle OAuth callback from Instagram or X, exchange code, store credentials.
+
+    Always prefer redirecting back to the admin UI with an error query param
+    instead of returning a bare 500 JSON to the browser.
+    """
     provider = provider.lower().strip()
+    fallback_redirect = "/admin/social-accounts"
+
+    # Instagram may append #_ to the code; strip anything after # if present
+    if code:
+        code = code.split("#", 1)[0].strip()
+
+    if error:
+        logger.warning(
+            "oauth_provider_error",
+            provider=provider,
+            error=error,
+            error_description=error_description,
+        )
+        return RedirectResponse(
+            url=_build_redirect_url(
+                fallback_redirect,
+                error=error,
+                provider=provider,
+            ),
+            status_code=307,
+        )
+
+    if not code or not state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing OAuth code or state. Please try connecting again.",
+        )
+
     state_data = await pop_oauth_state(state)
     if state_data is None:
         raise HTTPException(
@@ -204,7 +262,7 @@ async def oauth_callback(
             detail="Missing or expired OAuth state. Please try connecting again.",
         )
 
-    redirect_after = state_data.get("redirect_after", "/")
+    redirect_after = state_data.get("redirect_after") or fallback_redirect
 
     if provider not in ("instagram", "x"):
         return RedirectResponse(
@@ -212,161 +270,221 @@ async def oauth_callback(
             status_code=307,
         )
 
-    org_id = uuid.UUID(state_data["org_id"])
-    created_by = uuid.UUID(state_data["created_by"]) if state_data.get("created_by") else None
-    code_verifier = state_data.get("code_verifier", "")
-
     try:
-        token_response = await _exchange_code_for_token(provider, code, code_verifier)
-    except Exception as exc:
-        logger.warning(
-            "oauth_token_exchange_failed",
-            provider=provider,
-            error=str(exc),
+        org_id = uuid.UUID(state_data["org_id"])
+        created_by = (
+            uuid.UUID(state_data["created_by"]) if state_data.get("created_by") else None
         )
+        code_verifier = state_data.get("code_verifier", "")
+
+        try:
+            token_response = await _exchange_code_for_token(provider, code, code_verifier)
+        except Exception as exc:
+            body = ""
+            if isinstance(exc, httpx.HTTPStatusError):
+                body = (exc.response.text or "")[:500]
+            logger.warning(
+                "oauth_token_exchange_failed",
+                provider=provider,
+                error=str(exc),
+                body=body,
+            )
+            return RedirectResponse(
+                url=_build_redirect_url(
+                    redirect_after,
+                    error="oauth_failed",
+                    provider=provider,
+                ),
+                status_code=307,
+            )
+
+        access_token = token_response.get("access_token", "")
+        if not access_token:
+            logger.warning("oauth_missing_access_token", provider=provider)
+            return RedirectResponse(
+                url=_build_redirect_url(
+                    redirect_after, error="oauth_failed", provider=provider
+                ),
+                status_code=307,
+            )
+
+        refresh_token = token_response.get("refresh_token")
+        token_type = token_response.get("token_type", "bearer")
+        scope = _normalize_scope(token_response.get("scope", ""))
+        expires_in_raw = token_response.get("expires_in")
+        expires_at_dt: datetime | None = None
+        if expires_in_raw is not None:
+            try:
+                expires_at_dt = datetime.now(UTC).replace(microsecond=0) + timedelta(
+                    seconds=int(expires_in_raw)
+                )
+            except (TypeError, ValueError):
+                expires_at_dt = None
+
+        account_repo = SocialAccountRepository(db)
+        creds_repo = EncryptedCredentialsRepository(db)
+        connector = get_connector(provider)
+
+        provider_account_id = str(token_response.get("provider_account_id") or "pending")
+        username = token_response.get("username") or "pending"
+
+        existing = None
+        if provider_account_id != "pending":
+            existing = await account_repo.get_by_provider_account(
+                org_id, provider, provider_account_id
+            )
+
+        if existing:
+            account = existing
+            await account_repo.update(
+                account,
+                connection_status=AccountConnectionStatus.active,
+                revoked_at=None,
+                last_error=None,
+                username=username if username != "pending" else existing.username,
+            )
+        else:
+            account = await account_repo.create(
+                org_id=org_id,
+                provider=provider,
+                provider_account_id=provider_account_id,
+                username=username,
+                connection_status="active",
+                created_by=created_by,
+            )
+
+        creds = await creds_repo.create_or_update(
+            social_account_id=account.id,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_type=token_type,
+            scope=scope,
+            expires_at=expires_at_dt,
+        )
+
+        try:
+            result = await connector.validate(account, creds)
+            valid = result.get("valid", False)
+            new_status = (
+                AccountConnectionStatus.active if valid else AccountConnectionStatus.error
+            )
+            now = datetime.now(UTC)
+
+            update_kwargs: dict[str, Any] = {
+                "connection_status": new_status,
+                "capabilities_snapshot": result,
+                "last_validated_at": now,
+            }
+            if not valid:
+                update_kwargs["last_error"] = str(result.get("error") or "Validation failed")
+
+            if result.get("provider_account_id"):
+                update_kwargs["provider_account_id"] = str(result["provider_account_id"])
+            if result.get("username"):
+                update_kwargs["username"] = result["username"]
+            if result.get("display_name"):
+                update_kwargs["display_name"] = result["display_name"]
+            if result.get("profile_image_url"):
+                update_kwargs["profile_image_url"] = result["profile_image_url"]
+
+            mapped_type = _map_instagram_account_type(result.get("account_type"))
+            if mapped_type is not None:
+                update_kwargs["account_type"] = mapped_type
+
+            await account_repo.update(account, **update_kwargs)
+        except Exception as exc:
+            logger.warning(
+                "oauth_validate_failed",
+                provider=provider,
+                error=str(exc),
+                exc_info=True,
+            )
+            await account_repo.update(
+                account,
+                connection_status=AccountConnectionStatus.error,
+                last_error=str(exc)[:500],
+                last_validated_at=datetime.now(UTC),
+            )
+
+        logger.info(
+            "oauth_connection_complete",
+            provider=provider,
+            org_id=str(org_id),
+            account_id=str(account.id),
+        )
+
+        audit_svc = AuditService(db)
+        await audit_svc.log_action(
+            organization_id=org_id,
+            user_id=created_by,
+            action="social_account.connected",
+            entity_type="social_account",
+            entity_id=account.id,
+            details={"provider": provider, "live": True},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+
         return RedirectResponse(
             url=_build_redirect_url(
                 redirect_after,
-                error="oauth_failed",
+                connected="1",
                 provider=provider,
             ),
             status_code=307,
         )
-
-    access_token = token_response.get("access_token", "")
-    refresh_token = token_response.get("refresh_token")
-    token_type = token_response.get("token_type", "bearer")
-    scope = token_response.get("scope", "")
-    expires_in = token_response.get("expires_in")
-    expires_at = (
-        datetime.now(UTC).timestamp() + expires_in
-        if expires_in
-        else None
-    )
-
-    account_repo = SocialAccountRepository(db)
-    creds_repo = EncryptedCredentialsRepository(db)
-    connector = get_connector(provider)
-
-    provider_account_id = token_response.get("provider_account_id") or "pending"
-    username = token_response.get("username") or "pending"
-
-    # Upsert if this provider account is already connected for the org
-    existing = None
-    if provider_account_id != "pending":
-        existing = await account_repo.get_by_provider_account(
-            org_id, provider, str(provider_account_id)
-        )
-
-    if existing:
-        account = existing
-        await account_repo.update(
-            account,
-            connection_status=AccountConnectionStatus.active.value,
-            revoked_at=None,
-            last_error=None,
-            username=username if username != "pending" else existing.username,
-        )
-    else:
-        account = await account_repo.create(
-            org_id=org_id,
-            provider=provider,
-            provider_account_id=str(provider_account_id),
-            username=username,
-            connection_status="active",
-            created_by=created_by,
-        )
-
-    creds = await creds_repo.create_or_update(
-        social_account_id=account.id,
-        access_token=access_token,
-        refresh_token=refresh_token,
-        token_type=token_type,
-        scope=scope,
-        expires_at=datetime.fromtimestamp(expires_at, tz=UTC) if expires_at else None,
-    )
-
-    try:
-        result = await connector.validate(account, creds)
-        valid = result.get("valid", False)
-        new_status = AccountConnectionStatus.active if valid else AccountConnectionStatus.error
-        now = datetime.now(UTC)
-
-        update_kwargs: dict[str, Any] = {
-            "connection_status": new_status.value,
-            "capabilities_snapshot": result,
-            "last_validated_at": now,
-        }
-        if not valid:
-            update_kwargs["last_error"] = result.get("error", "Validation failed")
-
-        if result.get("provider_account_id"):
-            update_kwargs["provider_account_id"] = str(result["provider_account_id"])
-        if result.get("username"):
-            update_kwargs["username"] = result["username"]
-        if result.get("display_name"):
-            update_kwargs["display_name"] = result["display_name"]
-        if result.get("profile_image_url"):
-            update_kwargs["profile_image_url"] = result["profile_image_url"]
-        if result.get("account_type"):
-            update_kwargs["account_type"] = result["account_type"]
-
-        await account_repo.update(account, **update_kwargs)
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("oauth_validate_failed", provider=provider, error=str(exc))
-        await account_repo.update(
-            account,
-            connection_status=AccountConnectionStatus.error.value,
-            last_error=str(exc),
-            last_validated_at=datetime.now(UTC),
-        )
-
-    logger.info(
-        "oauth_connection_complete",
-        provider=provider,
-        org_id=str(org_id),
-        account_id=str(account.id),
-    )
-
-    audit_svc = AuditService(db)
-    await audit_svc.log_action(
-        organization_id=org_id,
-        user_id=created_by,
-        action="social_account.connected",
-        entity_type="social_account",
-        entity_id=account.id,
-        details={"provider": provider, "live": True},
-        ip_address=request.client.host if request and request.client else None,
-        user_agent=request.headers.get("user-agent") if request else None,
-    )
-
-    return RedirectResponse(
-        url=_build_redirect_url(
-            redirect_after,
-            connected="1",
+        logger.exception(
+            "oauth_callback_unhandled_error",
             provider=provider,
-        ),
-        status_code=307,
-    )
+            error=str(exc),
+        )
+        safe_redirect = fallback_redirect
+        try:
+            safe_redirect = redirect_after  # set after state is loaded
+        except NameError:
+            pass
+        return RedirectResponse(
+            url=_build_redirect_url(
+                safe_redirect,
+                error="server_error",
+                provider=provider,
+            ),
+            status_code=307,
+        )
 
 
 async def _exchange_code_for_token(
     provider: str, code: str, code_verifier: str
 ) -> dict[str, Any]:
     """Exchange an OAuth authorization code for a live access token."""
+    # Re-read settings so production .env values are always current
+    cfg = get_settings()
+
     async with httpx.AsyncClient(timeout=30) as client:
         if provider == "instagram":
+            if not cfg.instagram_app_id or not cfg.instagram_app_secret:
+                raise RuntimeError("Instagram app credentials not configured")
+
             # Short-lived token
             resp = await client.post(
                 "https://api.instagram.com/oauth/access_token",
                 data={
-                    "client_id": settings.instagram_app_id,
-                    "client_secret": settings.instagram_app_secret,
+                    "client_id": cfg.instagram_app_id,
+                    "client_secret": cfg.instagram_app_secret,
                     "grant_type": "authorization_code",
-                    "redirect_uri": settings.instagram_redirect_uri,
+                    "redirect_uri": cfg.instagram_redirect_uri,
                     "code": code,
                 },
             )
+            if resp.status_code >= 400:
+                logger.warning(
+                    "instagram_short_token_error",
+                    status=resp.status_code,
+                    body=resp.text[:800],
+                )
             resp.raise_for_status()
             data = resp.json()
             # Response may be flat or nested under data[0]
@@ -375,41 +493,59 @@ async def _exchange_code_for_token(
             else:
                 short = data
 
-            short_token = short["access_token"]
-            user_id = str(short.get("user_id", ""))
+            short_token = short.get("access_token")
+            if not short_token:
+                raise RuntimeError(f"Instagram token response missing access_token: {data}")
+
+            # user_id is on short-lived response for Instagram Login
+            user_id = str(short.get("user_id") or "")
 
             # Exchange for long-lived token (~60 days)
             long_resp = await client.get(
                 "https://graph.instagram.com/access_token",
                 params={
                     "grant_type": "ig_exchange_token",
-                    "client_secret": settings.instagram_app_secret,
+                    "client_secret": cfg.instagram_app_secret,
                     "access_token": short_token,
                 },
             )
-            long_resp.raise_for_status()
+            if long_resp.status_code >= 400:
+                logger.warning(
+                    "instagram_long_token_error",
+                    status=long_resp.status_code,
+                    body=long_resp.text[:800],
+                )
+                # Fall back to short-lived token so connect can still succeed
+                return {
+                    "access_token": short_token,
+                    "token_type": "bearer",
+                    "expires_in": short.get("expires_in", 3600),
+                    "provider_account_id": user_id or "pending",
+                    "scope": "instagram_business_basic,instagram_business_content_publish",
+                }
             long_data = long_resp.json()
+            long_token = long_data.get("access_token") or short_token
 
             return {
-                "access_token": long_data["access_token"],
+                "access_token": long_token,
                 "token_type": long_data.get("token_type", "bearer"),
                 "expires_in": long_data.get("expires_in", 5184000),
-                "provider_account_id": user_id,
+                "provider_account_id": user_id or "pending",
                 "scope": "instagram_business_basic,instagram_business_content_publish",
             }
 
         if provider == "x":
             credentials = base64.b64encode(
-                f"{settings.x_client_id}:{settings.x_client_secret}".encode()
+                f"{cfg.x_client_id}:{cfg.x_client_secret}".encode()
             ).decode()
             resp = await client.post(
                 "https://api.x.com/2/oauth2/token",
                 data={
                     "code": code,
                     "grant_type": "authorization_code",
-                    "redirect_uri": settings.x_redirect_uri,
+                    "redirect_uri": cfg.x_redirect_uri,
                     "code_verifier": code_verifier,
-                    "client_id": settings.x_client_id,
+                    "client_id": cfg.x_client_id,
                 },
                 headers={
                     "Authorization": f"Basic {credentials}",
