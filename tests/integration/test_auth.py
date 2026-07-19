@@ -1,11 +1,33 @@
 """Integration tests for authentication flow: login, logout, me, password reset."""
 
+import re
+
 import pytest
 from httpx import AsyncClient
 
 from app.repositories import UserRepository
 from app.repositories.organization import OrganizationRepository
 from app.models import MembershipRole
+
+
+def _set_cookie_headers(response) -> list[str]:
+    """All Set-Cookie header values (httpx may only expose non-HttpOnly in .cookies)."""
+    # httpx 0.27+: multi-value headers
+    if hasattr(response.headers, "get_list"):
+        values = response.headers.get_list("set-cookie")
+        if values:
+            return values
+    raw = response.headers.get("set-cookie")
+    return [raw] if raw else []
+
+
+def _cookie_names_from_set_cookie(response) -> set[str]:
+    names: set[str] = set()
+    for header in _set_cookie_headers(response):
+        match = re.match(r"([^=]+)=", header.strip())
+        if match:
+            names.add(match.group(1))
+    return names
 
 
 class TestLogin:
@@ -20,8 +42,11 @@ class TestLogin:
         assert data["user"]["id"] == str(test_user.id)
         assert len(data["memberships"]) >= 1
 
-        # Cookie should be set
-        assert "res_session" in response.cookies
+        # Session (HttpOnly) + CSRF (readable) — check Set-Cookie headers, not
+        # response.cookies (httpx often omits HttpOnly cookies from that mapping).
+        cookie_names = _cookie_names_from_set_cookie(response)
+        assert "res_session" in cookie_names
+        assert "res_csrf" in cookie_names
 
     async def test_login_wrong_password(self, client: AsyncClient, test_user):
         response = await client.post(
