@@ -106,6 +106,8 @@ jobs:
         run: |
           pytest -c services/api/pyproject.toml
         env:
+          ENV: testing
+          RATE_LIMIT_ENABLED: "false"
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/realestate
           REDIS_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-minimum-32-chars-long-ci

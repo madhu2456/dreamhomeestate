@@ -168,7 +168,7 @@ class Settings(BaseSettings):
 
     @property
     def is_development(self) -> bool:
-        return self.env.lower() == "development"
+        return self.env.lower() in ("development", "testing", "test")
 
 
 @lru_cache

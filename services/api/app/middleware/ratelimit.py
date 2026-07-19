@@ -6,8 +6,8 @@ Route groups and their default limits:
   - API routes      (/api/v1/)            →  60 req / 60 s per user/IP
   - Public routes   (everything else)     →  30 req / 60 s per IP
 
-In development mode (ENV=development) the middleware logs a warning but
-never blocks — it always lets the request through.
+In development/testing mode (or when RATE_LIMIT_ENABLED=false) the
+middleware never blocks requests.
 """
 
 from __future__ import annotations
@@ -111,8 +111,10 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Only enforce if the feature flag is on.
-        if not settings.rate_limit_enabled:
+        # Only enforce if the feature flag is on (disabled in tests / local).
+        # Re-read settings each request so env overrides apply after import.
+        current = get_settings()
+        if not current.rate_limit_enabled or current.is_development:
             await self.app(scope, receive, send)
             return
 
@@ -121,7 +123,7 @@ class RateLimitMiddleware:
         group, limit, window = _classify_path(path)
         key = _rate_limit_key(window, group, client_ip)
 
-        dev_mode = settings.is_development
+        dev_mode = current.is_development
 
         try:
             r = aioredis.from_url(settings.redis_url, decode_responses=True)

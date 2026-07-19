@@ -43,6 +43,8 @@ os.environ.setdefault("S3_BUCKET_NAME", "test")
 os.environ.setdefault("S3_PUBLIC_URL", "http://localhost:9000/test")
 # Valid 32-byte url-safe base64 Fernet key (test-only)
 os.environ.setdefault("OAUTH_ENCRYPTION_KEY", "E14MeR_CCL3_Z1DPIjLdwyKaesR31uBoRFNFregVs-A=")
+# Integration suite issues >60 API calls from one IP; never rate-limit tests
+os.environ["RATE_LIMIT_ENABLED"] = "false"
 
 from app.database import Base
 from app.models import (
