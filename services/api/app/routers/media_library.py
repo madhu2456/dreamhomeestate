@@ -8,6 +8,7 @@ from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -148,7 +149,11 @@ async def upload_media_library_item(
     return MediaLibraryItemOut.model_validate(item)
 
 
-@router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
 async def delete_media_library_item(
     item_id: uuid.UUID,
     org: Annotated[Organization, Depends(get_organization)],
@@ -156,7 +161,7 @@ async def delete_media_library_item(
     _membership=Depends(
         require_role(MembershipRole.owner, MembershipRole.administrator, MembershipRole.editor)
     ),
-) -> None:
+) -> Response:
     result = await db.execute(
         select(MediaLibraryItem).where(
             MediaLibraryItem.id == item_id,
@@ -168,3 +173,4 @@ async def delete_media_library_item(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
     await db.delete(item)
     await db.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
