@@ -42,11 +42,24 @@ class TestLogin:
         assert data["user"]["id"] == str(test_user.id)
         assert len(data["memberships"]) >= 1
 
-        # Session (HttpOnly) + CSRF (readable) — check Set-Cookie headers, not
-        # response.cookies (httpx often omits HttpOnly cookies from that mapping).
+        # Session (HttpOnly) + CSRF (readable). Prefer Set-Cookie headers —
+        # httpx response.cookies can omit HttpOnly cookies.
         cookie_names = _cookie_names_from_set_cookie(response)
-        assert "res_session" in cookie_names
+        assert "res_session" in cookie_names, (
+            f"session cookie missing from Set-Cookie; got {cookie_names!r}. "
+            "If only csrf is present, a middleware may be collapsing multi Set-Cookie headers."
+        )
         assert "res_csrf" in cookie_names
+
+        # Functional check: session cookie authenticates /me
+        session_header = next(
+            h for h in _set_cookie_headers(response) if h.startswith("res_session=")
+        )
+        session_value = session_header.split(";", 1)[0].split("=", 1)[1]
+        client.cookies.set("res_session", session_value)
+        me = await client.get("/api/v1/auth/me")
+        assert me.status_code == 200
+        assert me.json()["user"]["email"] == test_user.email
 
     async def test_login_wrong_password(self, client: AsyncClient, test_user):
         response = await client.post(

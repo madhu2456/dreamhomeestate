@@ -35,6 +35,9 @@ class SecurityHeadersMiddleware:
       - X-XSS-Protection: 0
       - Referrer-Policy: strict-origin-when-cross-origin
       - Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+    Important: never collapse multi-value headers (especially multiple
+    ``Set-Cookie``) via ``dict(headers)`` — that drops all but the last cookie.
     """
 
     def __init__(self, app):
@@ -47,25 +50,27 @@ class SecurityHeadersMiddleware:
 
         async def send_wrapper(message):
             if message["type"] == "http.response.start":
-                headers = dict(message.get("headers", []))
-                # Decode existing headers to check for pre-existing security headers;
-                # never overwrite headers that the app has already set.
-                headers_lower = {k.decode("latin-1").lower(): k for k in headers}
+                # Keep as a list of pairs so repeated Set-Cookie headers survive
+                headers: list[tuple[bytes, bytes]] = list(message.get("headers", []))
+                existing_lower = {k.decode("latin-1").lower() for k, _ in headers}
 
-                security_headers = {
-                    b"content-security-policy": _build_csp().encode("latin-1"),
-                    b"x-content-type-options": b"nosniff",
-                    b"x-frame-options": b"DENY",
-                    b"x-xss-protection": b"0",
-                    b"referrer-policy": b"strict-origin-when-cross-origin",
-                    b"permissions-policy": b"camera=(), microphone=(), geolocation=()",
-                }
+                security_headers: list[tuple[bytes, bytes]] = [
+                    (b"content-security-policy", _build_csp().encode("latin-1")),
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"x-frame-options", b"DENY"),
+                    (b"x-xss-protection", b"0"),
+                    (b"referrer-policy", b"strict-origin-when-cross-origin"),
+                    (
+                        b"permissions-policy",
+                        b"camera=(), microphone=(), geolocation=()",
+                    ),
+                ]
 
-                for key, value in security_headers.items():
-                    if key.decode("latin-1") not in headers_lower:
-                        headers[key] = value
+                for key, value in security_headers:
+                    if key.decode("latin-1") not in existing_lower:
+                        headers.append((key, value))
 
-                message["headers"] = list(headers.items())
+                message["headers"] = headers
 
             await send(message)
 
