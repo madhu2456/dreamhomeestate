@@ -253,6 +253,15 @@ class PublicationService:
         if not accounts:
             raise ValueError("None of the selected accounts are active Instagram/X destinations")
 
+        # Instagram Graph cannot create a feed post without a public media URL
+        has_instagram = any(a.provider.value == "instagram" for a in accounts)
+        if has_instagram and not media_urls:
+            raise ValueError(
+                "Instagram requires at least one public image or video. "
+                "Upload a poster/photo in Quick Post (or pick from the media library), "
+                "then select it before creating the campaign."
+            )
+
         campaign = await self.campaign_repo.create(
             org_id=org_id,
             listing_id=None,

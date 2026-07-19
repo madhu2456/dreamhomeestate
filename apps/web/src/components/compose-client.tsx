@@ -120,6 +120,18 @@ export function ComposeClient({ organizations }: ComposeClientProps) {
       toast({ title: 'Add caption or media', variant: 'destructive' });
       return;
     }
+    const hasInstagram = accounts.some(
+      (a) => selectedAccounts.includes(a.id) && a.provider === 'instagram'
+    );
+    if (hasInstagram && selectedMedia.length === 0) {
+      toast({
+        title: 'Image or video required for Instagram',
+        description:
+          'Instagram cannot publish text-only posts. Upload a poster/photo, click it to select, then publish.',
+        variant: 'destructive',
+      });
+      return;
+    }
     setPublishing(true);
     try {
       const campaign = await apiPost<{ id: string; jobs: unknown[] }>(
