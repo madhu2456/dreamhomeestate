@@ -4,7 +4,7 @@ import { Suspense, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   Building2,
@@ -32,7 +32,6 @@ const loginSchema = z.object({
 type LoginForm = z.infer<typeof loginSchema>;
 
 function LoginFormInner() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const redirect = searchParams.get('redirect') ?? '/admin';
 
@@ -80,11 +79,14 @@ function LoginFormInner() {
         throw new Error(message);
       }
 
-      router.push(redirect);
-      router.refresh();
+      // Full navigation so the session cookie is always sent on the next request.
+      // Soft router.push can race with cookie commit / Server Component auth.
+      const target =
+        redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/admin';
+      window.location.assign(target);
+      return;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed. Please try again.');
-    } finally {
       setLoading(false);
     }
   }

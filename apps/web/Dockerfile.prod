@@ -30,6 +30,8 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+# Runtime: Server Components call the API over the docker network
+ENV API_INTERNAL_URL=http://api:8000
 
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs

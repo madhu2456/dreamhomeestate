@@ -1,10 +1,24 @@
 import type { ApiError } from '@/lib/types';
 
-const API_BASE = '';
-
 interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown;
   cookies?: string;
+}
+
+/**
+ * Browser: same-origin (nginx proxies /api → FastAPI).
+ * Server Components: call the API container directly (relative /api URLs
+ * break inside Docker because Next cannot resolve them to the api service).
+ */
+function getApiBase(): string {
+  if (typeof window !== 'undefined') {
+    return '';
+  }
+  const internal =
+    process.env.API_INTERNAL_URL?.replace(/\/$/, '') ||
+    process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ||
+    'http://api:8000';
+  return internal;
 }
 
 /**
@@ -35,7 +49,12 @@ class ApiRequestError extends Error {
 }
 
 function buildUrl(path: string): string {
-  return `${API_BASE}${path}`;
+  const base = getApiBase();
+  if (!base) {
+    return path;
+  }
+  // path is always absolute from root, e.g. /api/v1/...
+  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
 async function handleResponse<T>(response: Response): Promise<T> {
