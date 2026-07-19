@@ -257,13 +257,21 @@ class InstagramConnector(SocialConnector):
             data=params,
         )
         if resp.status_code >= 400:
+            body_text = resp.text[:800]
             logger.warning(
                 "instagram_create_container_failed",
                 status=resp.status_code,
-                body=resp.text[:800],
+                body=body_text,
             )
+            msg = self._extract_error_message(resp)
+            if "aspect ratio" in msg.lower():
+                msg = (
+                    f"{msg} Instagram feed images must be between 4:5 and 1.91:1 "
+                    "(square 1:1 is safest). Re-upload the image so it is converted "
+                    "to 1080×1080, then create a new campaign."
+                )
             raise ProviderPublishError(
-                self._extract_error_message(resp),
+                msg,
                 status_code=resp.status_code,
                 code="ig_container_failed",
             )

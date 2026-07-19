@@ -281,6 +281,39 @@ async def delete_objects(object_keys: list[str]) -> None:
             logger.warning("s3_delete_warning", key=key, error=str(e))
 
 
+def _to_rgb_flat(img: Image.Image) -> Image.Image:
+    """Convert any mode to RGB (flatten alpha onto white)."""
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.split()[-1])
+        return background
+    if img.mode != "RGB":
+        return img.convert("RGB")
+    return img
+
+
+def fit_instagram_feed_image(img: Image.Image, size: int = 1080) -> Image.Image:
+    """Crop/pad to an Instagram-safe aspect ratio for feed posts.
+
+    Instagram Graph requires aspect ratio between **4:5 (0.8)** and **1.91:1**.
+    We produce a **1:1 square** (always valid) via center-cover crop to ``size x size``.
+    """
+    img = _to_rgb_flat(img)
+    w, h = img.size
+    if w <= 0 or h <= 0:
+        return Image.new("RGB", (size, size), (255, 255, 255))
+
+    # Center cover crop to square
+    side = min(w, h)
+    left = (w - side) // 2
+    top = (h - side) // 2
+    square = img.crop((left, top, left + side, top + side))
+    if square.size != (size, size):
+        square = square.resize((size, size), Image.Resampling.LANCZOS)
+    return square
+
+
 async def upload_library_image(
     file_bytes: bytes,
     org_id: uuid.UUID,
@@ -288,24 +321,31 @@ async def upload_library_image(
     ext: str,
     mime_type: str,
 ) -> tuple[str, str, int]:
-    """Upload a library image; return (object_key, public_url, size_bytes)."""
-    # Also store an Instagram-sized variant for posters
+    """Upload a library image; return (object_key, public_url, size_bytes).
+
+    Always converts to **1080×1080 JPEG** so Instagram accepts the aspect ratio.
+    """
     try:
         img = Image.open(io.BytesIO(file_bytes))
-        if img.mode in ("RGBA", "P", "LA"):
-            img = img.convert("RGB")
-        # Square-ish poster for IG
-        variant = img.copy()
-        max_w, max_h = 1080, 1080
-        variant.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+        img.load()
+        variant = fit_instagram_feed_image(img, size=1080)
         buf = io.BytesIO()
-        variant.save(buf, format="JPEG", quality=88)
+        variant.save(buf, format="JPEG", quality=90, optimize=True)
         upload_bytes = buf.getvalue()
         upload_ext = ".jpg"
         mime_type = "image/jpeg"
-    except Exception:
+        logger.info(
+            "library_image_instagram_fit",
+            org_id=str(org_id),
+            media_id=str(media_id),
+            out_bytes=len(upload_bytes),
+        )
+    except Exception as exc:
+        logger.warning("library_image_convert_failed", error=str(exc), ext=ext)
+        # Last resort: try square again on a blank failure path is worse —
+        # upload original only if we truly cannot convert
         upload_bytes = file_bytes
-        upload_ext = ext
+        upload_ext = ext if ext in ALLOWED_EXTENSIONS else ".jpg"
 
     return await upload_library_bytes(
         file_bytes=upload_bytes,
