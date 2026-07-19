@@ -130,10 +130,11 @@ class InstagramConnector(SocialConnector):
         ig_user_id = self._ig_user_id(account)
         caption = (content.get("body") or content.get("title") or "").strip()
         media_urls = [u for u in (content.get("media_urls") or []) if u]
+        media_kinds = content.get("media_kinds")  # optional parallel list: image|video
 
         if not media_urls:
             raise ProviderPublishError(
-                "Instagram posts require at least one public image URL",
+                "Instagram posts require at least one public image or video URL",
                 code="media_required",
             )
         if len(caption) > 2200:
@@ -142,27 +143,57 @@ class InstagramConnector(SocialConnector):
                 code="text_too_long",
             )
 
-        async with httpx.AsyncClient(timeout=90) as client:
-            if len(media_urls) == 1:
+        items = [
+            {
+                "url": url,
+                "kind": self._infer_media_kind(
+                    url,
+                    media_kinds[i] if isinstance(media_kinds, list) and i < len(media_kinds) else None,
+                ),
+            }
+            for i, url in enumerate(media_urls[:10])
+        ]
+
+        async with httpx.AsyncClient(timeout=180) as client:
+            if len(items) == 1 and items[0]["kind"] == "video":
+                container_id = await self._create_video_container(
+                    client,
+                    ig_user_id,
+                    access_token,
+                    video_url=items[0]["url"],
+                    caption=caption,
+                    is_carousel_item=False,
+                )
+            elif len(items) == 1:
                 container_id = await self._create_image_container(
                     client,
                     ig_user_id,
                     access_token,
-                    image_url=media_urls[0],
+                    image_url=items[0]["url"],
                     caption=caption,
                     is_carousel_item=False,
                 )
             else:
                 child_ids: list[str] = []
-                for url in media_urls[:10]:
-                    child_id = await self._create_image_container(
-                        client,
-                        ig_user_id,
-                        access_token,
-                        image_url=url,
-                        caption="",
-                        is_carousel_item=True,
-                    )
+                for item in items:
+                    if item["kind"] == "video":
+                        child_id = await self._create_video_container(
+                            client,
+                            ig_user_id,
+                            access_token,
+                            video_url=item["url"],
+                            caption="",
+                            is_carousel_item=True,
+                        )
+                    else:
+                        child_id = await self._create_image_container(
+                            client,
+                            ig_user_id,
+                            access_token,
+                            image_url=item["url"],
+                            caption="",
+                            is_carousel_item=True,
+                        )
                     await self._wait_for_container(client, child_id, access_token)
                     child_ids.append(child_id)
 
@@ -192,6 +223,15 @@ class InstagramConnector(SocialConnector):
                 "provider": "instagram",
                 "container_id": container_id,
             }
+
+    @staticmethod
+    def _infer_media_kind(url: str, hint: str | None = None) -> str:
+        if hint in ("image", "video"):
+            return hint
+        lower = (url or "").lower().split("?", 1)[0]
+        if lower.endswith((".mp4", ".mov", ".m4v", ".webm")):
+            return "video"
+        return "image"
 
     async def _create_image_container(
         self,
@@ -230,6 +270,50 @@ class InstagramConnector(SocialConnector):
         container_id = resp.json().get("id")
         if not container_id:
             raise ProviderPublishError("Instagram returned no container id", code="ig_container_failed")
+        return str(container_id)
+
+    async def _create_video_container(
+        self,
+        client: httpx.AsyncClient,
+        ig_user_id: str,
+        access_token: str,
+        *,
+        video_url: str,
+        caption: str,
+        is_carousel_item: bool,
+    ) -> str:
+        """Create a REELS/VIDEO container from a public video_url."""
+        params: dict[str, Any] = {
+            "media_type": "REELS" if not is_carousel_item else "VIDEO",
+            "video_url": video_url,
+            "access_token": access_token,
+        }
+        if is_carousel_item:
+            params["is_carousel_item"] = "true"
+            params["media_type"] = "VIDEO"
+        elif caption:
+            params["caption"] = caption
+
+        resp = await client.post(
+            f"{IG_GRAPH}/{IG_GRAPH_VERSION}/{ig_user_id}/media",
+            data=params,
+        )
+        if resp.status_code >= 400:
+            logger.warning(
+                "instagram_create_video_container_failed",
+                status=resp.status_code,
+                body=resp.text[:800],
+            )
+            raise ProviderPublishError(
+                self._extract_error_message(resp),
+                status_code=resp.status_code,
+                code="ig_video_container_failed",
+            )
+        container_id = resp.json().get("id")
+        if not container_id:
+            raise ProviderPublishError(
+                "Instagram returned no video container id", code="ig_video_container_failed"
+            )
         return str(container_id)
 
     async def _create_carousel_container(

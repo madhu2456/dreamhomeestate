@@ -44,11 +44,15 @@ class PublicationCampaignRepository:
     async def create(
         self,
         org_id: uuid.UUID,
-        listing_id: uuid.UUID,
+        listing_id: uuid.UUID | None = None,
         created_by: uuid.UUID | None = None,
         listing_version_id: uuid.UUID | None = None,
         auto_distribute: bool = False,
         account_overrides: dict | None = None,
+        campaign_kind: str = "listing",
+        title: str | None = None,
+        body: str | None = None,
+        media_urls: list[str] | None = None,
     ) -> PublicationCampaign:
         campaign = PublicationCampaign(
             organization_id=org_id,
@@ -57,6 +61,10 @@ class PublicationCampaignRepository:
             listing_version_id=listing_version_id,
             auto_distribute=auto_distribute,
             account_overrides=account_overrides,
+            campaign_kind=campaign_kind,
+            title=title,
+            body=body,
+            media_urls=media_urls,
         )
         self.db.add(campaign)
         await self.db.flush()

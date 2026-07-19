@@ -17,6 +17,7 @@ from app.repositories.publication import (
 from app.schemas.publication import (
     AttemptOut,
     CreateCampaignRequest,
+    CreateQuickPostRequest,
     JobActionResponse,
     PublicationCampaignOut,
     PublicationJobOut,
@@ -68,6 +69,7 @@ async def create_campaign(
             auto_distribute=body.auto_distribute,
             scheduled_at=body.scheduled_at,
             account_overrides=body.account_overrides,
+            social_account_ids=body.social_account_ids,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -79,11 +81,61 @@ async def create_campaign(
         user_id=current_user.id,
         campaign_id=campaign.id,
         action="campaign.created",
-        details={"listing_id": str(body.listing_id)},
+        details={
+            "listing_id": str(body.listing_id),
+            "social_account_ids": [str(i) for i in (body.social_account_ids or [])],
+        },
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
 
+    return PublicationCampaignOut.model_validate(campaign)
+
+
+@router.post(
+    "/quick-posts",
+    response_model=PublicationCampaignOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_quick_post(
+    body: CreateQuickPostRequest,
+    request: Request,
+    org: Annotated[Organization, Depends(get_organization)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: CurrentUser,
+    _membership=Depends(
+        require_role(MembershipRole.owner, MembershipRole.administrator, MembershipRole.editor)
+    ),
+) -> PublicationCampaignOut:
+    """Compose a freeform multi-account post (caption + media URLs)."""
+    svc = PublicationService(db)
+    try:
+        campaign = await svc.create_quick_post(
+            org_id=org.id,
+            body=body.body,
+            media_urls=body.media_urls,
+            social_account_ids=body.social_account_ids,
+            title=body.title,
+            created_by=current_user.id if current_user else None,
+            auto_distribute=body.auto_distribute,
+            scheduled_at=body.scheduled_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    audit_svc = AuditService(db)
+    await audit_svc.log_campaign_action(
+        org_id=org.id,
+        user_id=current_user.id,
+        campaign_id=campaign.id,
+        action="campaign.quick_post_created",
+        details={
+            "account_count": len(body.social_account_ids),
+            "media_count": len(body.media_urls),
+        },
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
     return PublicationCampaignOut.model_validate(campaign)
 
 

@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Link2,
   LogOut,
+  PenSquare,
   Send,
   Settings,
   Users,
@@ -19,6 +20,7 @@ import { Toaster } from '@/components/ui/toaster';
 const NAV_ITEMS = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard, exact: true },
   { href: '/admin/listings', label: 'Listings', icon: Home },
+  { href: '/admin/compose', label: 'Quick Post', icon: PenSquare },
   { href: '/admin/social-accounts', label: 'Social Accounts', icon: Link2 },
   { href: '/admin/templates', label: 'Content', icon: FileText },
   { href: '/admin/publications', label: 'Publications', icon: Send },

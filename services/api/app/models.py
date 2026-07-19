@@ -758,7 +758,7 @@ class AttemptStatus(str, enum.Enum):
 
 
 class PublicationCampaign(Base):
-    """Groups publication jobs for one listing version."""
+    """Groups publication jobs for a listing campaign or a freeform quick post."""
 
     __tablename__ = "publication_campaigns"
 
@@ -770,16 +770,22 @@ class PublicationCampaign(Base):
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
     )
-    listing_id: Mapped[uuid.UUID] = mapped_column(
+    # Null for quick_post campaigns (freeform compose)
+    listing_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("listings.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     listing_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("listing_versions.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # listing | quick_post
+    campaign_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="listing")
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media_urls: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -805,14 +811,47 @@ class PublicationCampaign(Base):
     )
 
     organization: Mapped[Organization] = relationship(back_populates="publication_campaigns")
-    listing: Mapped[Listing] = relationship()
+    listing: Mapped[Listing | None] = relationship()
     listing_version: Mapped[ListingVersion | None] = relationship()
     jobs: Mapped[list["PublicationJob"]] = relationship(
         back_populates="campaign", lazy="selectin", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:
-        return f"<PublicationCampaign {self.id}>"
+        return f"<PublicationCampaign {self.id} {self.campaign_kind}>"
+
+
+class MediaLibraryItem(Base):
+    """Org-scoped media library for posters, images, and videos (quick posts)."""
+
+    __tablename__ = "media_library_items"
+    __table_args__ = (
+        Index("ix_media_library_org_created", "organization_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="image")
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    public_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    original_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
 
 
 class PublicationJob(Base):

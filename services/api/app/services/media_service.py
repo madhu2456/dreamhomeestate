@@ -238,3 +238,70 @@ async def delete_objects(object_keys: list[str]) -> None:
             )
         except Exception as e:
             logger.warning("s3_delete_warning", key=key, error=str(e))
+
+
+async def upload_library_image(
+    file_bytes: bytes,
+    org_id: uuid.UUID,
+    media_id: uuid.UUID,
+    ext: str,
+    mime_type: str,
+) -> tuple[str, str, int]:
+    """Upload a library image; return (object_key, public_url, size_bytes)."""
+    import asyncio
+
+    # Also store an Instagram-sized variant for posters
+    try:
+        img = Image.open(io.BytesIO(file_bytes))
+        if img.mode in ("RGBA", "P", "LA"):
+            img = img.convert("RGB")
+        # Square-ish poster for IG
+        variant = img.copy()
+        max_w, max_h = 1080, 1080
+        variant.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        variant.save(buf, format="JPEG", quality=88)
+        upload_bytes = buf.getvalue()
+        upload_ext = ".jpg"
+        mime_type = "image/jpeg"
+    except Exception:
+        upload_bytes = file_bytes
+        upload_ext = ext
+
+    return await upload_library_bytes(
+        file_bytes=upload_bytes,
+        org_id=org_id,
+        media_id=media_id,
+        ext=upload_ext,
+        mime_type=mime_type,
+        subfolder="image",
+    )
+
+
+async def upload_library_bytes(
+    file_bytes: bytes,
+    org_id: uuid.UUID,
+    media_id: uuid.UUID,
+    ext: str,
+    mime_type: str,
+    subfolder: str = "file",
+) -> tuple[str, str, int]:
+    """Upload raw bytes to org media library path; return (key, public_url, size)."""
+    import asyncio
+
+    s3_client = get_s3_client()
+    settings = get_settings()
+    bucket = settings.s3_bucket_name
+    key = f"library/{org_id}/{subfolder}/{media_id}{ext}"
+    buffer = io.BytesIO(file_bytes)
+
+    def _upload() -> None:
+        kwargs: dict = {}
+        if mime_type:
+            kwargs["ExtraArgs"] = {"ContentType": mime_type}
+        s3_client.upload_fileobj(buffer, bucket, key, **kwargs)
+
+    await asyncio.to_thread(_upload)
+    base = (settings.s3_public_url or "").rstrip("/")
+    public_url = f"{base}/{key.lstrip('/')}" if base else key
+    return key, public_url, len(file_bytes)

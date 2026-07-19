@@ -218,8 +218,12 @@ export interface PublicationJob {
 export interface PublicationCampaign {
   id: string;
   organization_id: string;
-  listing_id: string;
+  listing_id: string | null;
   listing_version_id: string | null;
+  campaign_kind?: string;
+  title?: string | null;
+  body?: string | null;
+  media_urls?: string[] | null;
   created_by: string | null;
   status: JobStatus;
   auto_distribute: boolean;
@@ -232,6 +236,15 @@ export interface CreateCampaignRequest {
   listing_id: string;
   auto_distribute?: boolean;
   scheduled_at?: string | null;
+  social_account_ids?: string[];
+}
+
+export interface CreateQuickPostRequest {
+  body: string;
+  title?: string;
+  media_urls: string[];
+  social_account_ids: string[];
+  auto_distribute?: boolean;
 }
 
 export interface JobActionResponse {

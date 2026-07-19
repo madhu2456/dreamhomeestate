@@ -3,7 +3,15 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Send, Loader2, RefreshCw, CheckCircle2, XCircle, RotateCcw, Ban, AlertCircle } from 'lucide-react';
 
-import type { Organization, PublicationCampaign, PublicationJob, JobActionResponse, JobStatus } from '@/lib/types';
+import type {
+  Listing,
+  Organization,
+  PublicationCampaign,
+  PublicationJob,
+  JobActionResponse,
+  JobStatus,
+  SocialAccount,
+} from '@/lib/types';
 import { apiGet, apiPost } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -54,6 +62,11 @@ interface PublicationsClientProps {
 export function PublicationsClient({ organizations }: PublicationsClientProps) {
   const [selectedOrgId, setSelectedOrgId] = useState(organizations[0]?.id ?? '');
   const [campaigns, setCampaigns] = useState<PublicationCampaign[]>([]);
+  const [listings, setListings] = useState<Listing[]>([]);
+  const [accounts, setAccounts] = useState<SocialAccount[]>([]);
+  const [listingId, setListingId] = useState('');
+  const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
+  const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -64,10 +77,23 @@ export function PublicationsClient({ organizations }: PublicationsClientProps) {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiGet<PublicationCampaign[]>(
-        `/api/v1/organizations/${selectedOrgId}/publications/campaigns`,
-      );
+      const [data, list, acc] = await Promise.all([
+        apiGet<PublicationCampaign[]>(
+          `/api/v1/organizations/${selectedOrgId}/publications/campaigns`
+        ),
+        apiGet<Listing[]>(`/api/v1/organizations/${selectedOrgId}/listings?limit=50`),
+        apiGet<SocialAccount[]>(`/api/v1/organizations/${selectedOrgId}/social-accounts`),
+      ]);
       setCampaigns(data);
+      setListings(list || []);
+      const active = (acc || []).filter(
+        (a) =>
+          a.connection_status === 'active' &&
+          (a.provider === 'instagram' || a.provider === 'x')
+      );
+      setAccounts(active);
+      setSelectedAccounts(active.map((a) => a.id));
+      setListingId((prev) => prev || list?.[0]?.id || '');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load campaigns');
     } finally {
@@ -78,6 +104,38 @@ export function PublicationsClient({ organizations }: PublicationsClientProps) {
   useEffect(() => {
     fetchCampaigns();
   }, [fetchCampaigns]);
+
+  const createListingCampaign = async () => {
+    if (!selectedOrgId || !listingId) {
+      toast({ title: 'Pick a listing', variant: 'destructive' });
+      return;
+    }
+    if (selectedAccounts.length === 0) {
+      toast({ title: 'Select at least one account', variant: 'destructive' });
+      return;
+    }
+    setCreating(true);
+    try {
+      await apiPost(`/api/v1/organizations/${selectedOrgId}/publications/campaigns`, {
+        listing_id: listingId,
+        social_account_ids: selectedAccounts,
+        auto_distribute: false,
+      });
+      toast({
+        title: 'Campaign created',
+        description: `Jobs created for ${selectedAccounts.length} account(s). Approve to publish.`,
+      });
+      await fetchCampaigns();
+    } catch (err) {
+      toast({
+        title: 'Failed',
+        description: err instanceof Error ? err.message : 'Error',
+        variant: 'destructive',
+      });
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const performAction = async (jobId: string, action: string) => {
     setActionLoading(`${jobId}-${action}`);
@@ -122,6 +180,75 @@ export function PublicationsClient({ organizations }: PublicationsClientProps) {
           </select>
         </div>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Publish listing to selected accounts</CardTitle>
+          <CardDescription>
+            Choose which Instagram/X accounts receive this listing. Or use{' '}
+            <a href="/admin/compose" className="text-accent underline">
+              Quick Post
+            </a>{' '}
+            for freeform multi-account posts.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-sm font-medium">Listing</label>
+              <select
+                className="h-10 w-full rounded-xl border border-input bg-background px-3 text-sm"
+                value={listingId}
+                onChange={(e) => setListingId(e.target.value)}
+              >
+                <option value="">Select listing…</option>
+                {listings.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">Accounts</label>
+              <div className="max-h-36 space-y-1 overflow-y-auto rounded-xl border border-border p-2">
+                {accounts.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No active accounts</p>
+                ) : (
+                  accounts.map((a) => (
+                    <label key={a.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={selectedAccounts.includes(a.id)}
+                        onChange={() =>
+                          setSelectedAccounts((prev) =>
+                            prev.includes(a.id)
+                              ? prev.filter((x) => x !== a.id)
+                              : [...prev, a.id]
+                          )
+                        }
+                      />
+                      <span className="capitalize">{a.provider}</span>
+                      <span className="text-muted-foreground">
+                        @{a.username || a.display_name || 'account'}
+                      </span>
+                    </label>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+          <Button
+            type="button"
+            className="rounded-full bg-accent text-accent-foreground"
+            disabled={creating}
+            onClick={() => void createListingCampaign()}
+          >
+            {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+            Create campaign for selected accounts
+          </Button>
+        </CardContent>
+      </Card>
 
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
@@ -201,8 +328,17 @@ function CampaignCard({
             {new Date(campaign.created_at).toLocaleDateString()}
           </span>
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>Listing: {campaign.listing_id.slice(0, 8)}...</span>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <Badge variant="outline" className="text-[10px]">
+            {campaign.campaign_kind === 'quick_post' ? 'Quick post' : 'Listing'}
+          </Badge>
+          {campaign.listing_id ? (
+            <span>Listing: {campaign.listing_id.slice(0, 8)}…</span>
+          ) : (
+            <span className="line-clamp-1 max-w-md">
+              {campaign.title || campaign.body?.slice(0, 80) || 'Freeform post'}
+            </span>
+          )}
           {campaign.auto_distribute && (
             <Badge variant="secondary" className="text-[10px]">
               auto-distribute

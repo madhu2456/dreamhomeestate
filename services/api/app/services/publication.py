@@ -27,9 +27,9 @@ from app.services.content_renderer import render_for_platform
 
 
 def _public_media_urls_for_listing(listing: Listing, *, max_items: int = 10) -> list[str]:
-    """Build absolute public URLs for listing images (cover first).
+    """Build absolute public URLs for listing images/videos (cover first).
 
-    Instagram Graph requires publicly reachable image URLs.
+    Instagram Graph requires publicly reachable media URLs.
     """
     from app.config import get_settings
 
@@ -48,7 +48,7 @@ def _public_media_urls_for_listing(listing: Listing, *, max_items: int = 10) -> 
     for m in media_list:
         kind = getattr(m, "kind", None)
         kind_val = kind.value if hasattr(kind, "value") else str(kind or "image")
-        if kind_val != "image":
+        if kind_val not in ("image", "video"):
             continue
         variants = m.variants or {}
         # Prefer platform-ready variants when present
@@ -70,6 +70,24 @@ def _public_media_urls_for_listing(listing: Listing, *, max_items: int = 10) -> 
     return urls
 
 
+def _active_accounts_for_org(
+    accounts: list,
+    social_account_ids: list[uuid.UUID] | None,
+) -> list:
+    """Filter to active IG/X accounts, optionally restricted to selected ids."""
+    selected = set(social_account_ids) if social_account_ids else None
+    out = []
+    for a in accounts:
+        if a.provider.value not in ("instagram", "x"):
+            continue
+        if a.connection_status.value != "active" or a.revoked_at:
+            continue
+        if selected is not None and a.id not in selected:
+            continue
+        out.append(a)
+    return out
+
+
 class PublicationService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -89,6 +107,7 @@ class PublicationService:
         auto_distribute: bool = False,
         scheduled_at: datetime | None = None,
         account_overrides: dict | None = None,
+        social_account_ids: list[uuid.UUID] | None = None,
     ) -> PublicationCampaign:
         listing = await self.listing_repo.get_by_id(org_id, listing_id)
         if not listing:
@@ -113,20 +132,15 @@ class PublicationService:
             listing_version_id=listing_version_id,
             auto_distribute=auto_distribute,
             account_overrides=account_overrides,
+            campaign_kind="listing",
         )
 
-        accounts = await self.social_account_repo.list_for_org(org_id)
-        # Live destinations only — skip revoked/expired and unsupported providers
-        accounts = [
-            a for a in accounts
-            if a.provider.value in ("instagram", "x")
-            and a.connection_status.value == "active"
-            and not a.revoked_at
-        ]
+        all_accounts = await self.social_account_repo.list_for_org(org_id)
+        accounts = _active_accounts_for_org(all_accounts, social_account_ids)
         if not accounts:
             raise ValueError(
-                "No active live Instagram or X accounts connected. "
-                "Connect at least one account before creating a campaign."
+                "No active Instagram or X accounts selected. "
+                "Connect accounts and select at least one destination."
             )
 
         variables = build_variables(listing)
@@ -208,6 +222,72 @@ class PublicationService:
                     error_message="; ".join(render_result.errors)[:1000],
                 )
 
+            if auto_distribute:
+                await self._enqueue_approval(job, created_by)
+
+        await self.db.refresh(campaign, ["jobs"])
+        return campaign
+
+    async def create_quick_post(
+        self,
+        org_id: uuid.UUID,
+        *,
+        body: str,
+        media_urls: list[str],
+        social_account_ids: list[uuid.UUID],
+        title: str | None = None,
+        created_by: uuid.UUID | None = None,
+        auto_distribute: bool = False,
+        scheduled_at: datetime | None = None,
+    ) -> PublicationCampaign:
+        """Freeform multi-account post (no listing required)."""
+        body = (body or "").strip()
+        media_urls = [u.strip() for u in (media_urls or []) if u and str(u).strip()]
+        if not body and not media_urls:
+            raise ValueError("Quick post requires caption text and/or media URLs")
+        if not social_account_ids:
+            raise ValueError("Select at least one social account")
+
+        all_accounts = await self.social_account_repo.list_for_org(org_id)
+        accounts = _active_accounts_for_org(all_accounts, social_account_ids)
+        if not accounts:
+            raise ValueError("None of the selected accounts are active Instagram/X destinations")
+
+        campaign = await self.campaign_repo.create(
+            org_id=org_id,
+            listing_id=None,
+            created_by=created_by,
+            listing_version_id=None,
+            auto_distribute=auto_distribute,
+            account_overrides=None,
+            campaign_kind="quick_post",
+            title=title,
+            body=body,
+            media_urls=media_urls,
+        )
+
+        for account in accounts:
+            media_for_account = list(media_urls)
+            if account.provider.value == "x":
+                media_for_account = media_for_account[:4]
+            elif account.provider.value == "instagram":
+                media_for_account = media_for_account[:10]
+
+            idempotency_key = f"qp_{campaign.id}_{account.id}"
+            job = await self.job_repo.create(
+                campaign_id=campaign.id,
+                social_account_id=account.id,
+                template_id=None,
+                idempotency_key=idempotency_key,
+                scheduled_at=scheduled_at,
+            )
+            await self.job_repo.update_status(
+                job,
+                job.status,
+                rendered_title=title,
+                rendered_body=body,
+                media_urls=media_for_account or None,
+            )
             if auto_distribute:
                 await self._enqueue_approval(job, created_by)
 

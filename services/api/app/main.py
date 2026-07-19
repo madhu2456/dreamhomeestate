@@ -124,6 +124,7 @@ def create_app() -> FastAPI:
         health_router,
         listing_media_router,
         listings_router,
+        media_library_router,
         organizations_router,
         public_router,
         publications_router,
@@ -140,6 +141,10 @@ def create_app() -> FastAPI:
     app.include_router(listings_router, prefix=f"{api_prefix}/organizations/{{org_id}}/listings")
     app.include_router(public_router, prefix=api_prefix)
     app.include_router(listing_media_router, prefix=f"{api_prefix}/organizations/{{org_id}}/listings")
+    app.include_router(
+        media_library_router,
+        prefix=f"{api_prefix}/organizations/{{org_id}}/media-library",
+    )
     app.include_router(social_accounts_router)
     app.include_router(content_router, prefix=f"{api_prefix}/organizations/{{org_id}}/content")
     app.include_router(publications_router, prefix=f"{api_prefix}/organizations/{{org_id}}/publications")
