@@ -1,12 +1,16 @@
-"""CSRF protection middleware using the double-submit cookie pattern.
+"""CSRF protection using the double-submit cookie pattern.
 
-For browser-based requests to mutating endpoints (POST/PUT/PATCH/DELETE),
-the request must include an X-CSRF-Token header whose value matches the
-session cookie value.  API clients that authenticate with Bearer tokens
-are exempt.
+Mutating browser requests must send:
+  X-CSRF-Token: <value matching the non-HttpOnly CSRF cookie>
 
-In development mode the check is lenient — it warns but does not block.
+The session cookie stays HttpOnly. A separate CSRF cookie (readable by JS)
+is set on login and via GET /api/v1/auth/csrf.
+
+API clients that authenticate with Bearer tokens are exempt.
+In development/testing the check is lenient (warn only).
 """
+
+from __future__ import annotations
 
 import structlog
 from fastapi import Request
@@ -25,6 +29,7 @@ SKIP_ROUTE_PREFIXES = (
     "/api/v1/auth/logout",
     "/api/v1/auth/password-reset-request",
     "/api/v1/auth/password-reset",
+    "/api/v1/auth/csrf",
 )
 
 
@@ -35,10 +40,10 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if not _should_check_csrf(request):
             return await call_next(request)
 
-        csrf_token: str | None = request.headers.get("X-CSRF-Token")
-        session_token: str | None = request.cookies.get(settings.session_cookie_name)
+        csrf_header: str | None = request.headers.get("X-CSRF-Token")
+        csrf_cookie: str | None = request.cookies.get(settings.csrf_cookie_name)
 
-        if not csrf_token:
+        if not csrf_header:
             logger.warning(
                 "csrf_token_missing",
                 method=request.method,
@@ -53,7 +58,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
                 content={"detail": "CSRF token missing"},
             )
 
-        if csrf_token != session_token:
+        if not csrf_cookie or csrf_header != csrf_cookie:
             logger.warning(
                 "csrf_token_mismatch",
                 method=request.method,
@@ -82,9 +87,8 @@ def _should_check_csrf(request: Request) -> bool:
             return False
 
     # API clients that authenticate with Bearer tokens skip CSRF.
-    # CSRF is a browser-originated attack; Bearer clients manage tokens themselves.
     auth_header: str | None = request.headers.get("Authorization", "")
-    if auth_header.lower().startswith("bearer "):
+    if auth_header and auth_header.lower().startswith("bearer "):
         return False
 
     return True

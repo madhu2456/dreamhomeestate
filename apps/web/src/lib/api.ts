@@ -5,6 +5,9 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
   cookies?: string;
 }
 
+const CSRF_COOKIE_NAMES = ['dhe_csrf', 'res_csrf'] as const;
+const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
 /**
  * Browser: same-origin (nginx proxies /api → FastAPI).
  * Server Components: call the API container directly (relative /api URLs
@@ -19,6 +22,65 @@ function getApiBase(): string {
     process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ||
     'http://api:8000';
   return internal;
+}
+
+function readCookieFromDocument(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function extractCookie(cookieHeader: string, name: string): string | null {
+  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/** Read the double-submit CSRF token from document cookies (browser only). */
+export function getCsrfToken(): string | null {
+  for (const name of CSRF_COOKIE_NAMES) {
+    const value = readCookieFromDocument(name);
+    if (value) return value;
+  }
+  return null;
+}
+
+function resolveCsrfToken(cookieHeader?: string): string | null {
+  if (typeof window !== 'undefined') {
+    return getCsrfToken();
+  }
+  if (cookieHeader) {
+    for (const name of CSRF_COOKIE_NAMES) {
+      const value = extractCookie(cookieHeader, name);
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
+/**
+ * Ensure a CSRF cookie exists (browser). Safe to call before any mutation.
+ * No-ops on the server.
+ */
+export async function ensureCsrfToken(): Promise<string | null> {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const existing = getCsrfToken();
+  if (existing) return existing;
+
+  try {
+    const res = await fetch(buildUrl('/api/v1/auth/csrf'), {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { csrf_token?: string };
+    return data.csrf_token ?? getCsrfToken();
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -53,7 +115,6 @@ function buildUrl(path: string): string {
   if (!base) {
     return path;
   }
-  // path is always absolute from root, e.g. /api/v1/...
   return `${base}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
@@ -93,19 +154,32 @@ export async function apiFetch<T = unknown>(
   options: RequestOptions = {}
 ): Promise<T> {
   const { body, cookies, ...fetchOptions } = options;
+  const method = (fetchOptions.method ?? 'GET').toUpperCase();
 
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     Accept: 'application/json',
     ...(body && !(body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
     ...(fetchOptions.headers as Record<string, string>),
   };
 
   if (cookies) {
-    (headers as Record<string, string>)['Cookie'] = cookies;
+    headers['Cookie'] = cookies;
+  }
+
+  if (MUTATING.has(method) && !headers['X-CSRF-Token']) {
+    // Prefer existing cookie; on the browser, refresh if missing
+    let csrf = resolveCsrfToken(cookies);
+    if (!csrf && typeof window !== 'undefined') {
+      csrf = await ensureCsrfToken();
+    }
+    if (csrf) {
+      headers['X-CSRF-Token'] = csrf;
+    }
   }
 
   const init: RequestInit = {
     ...fetchOptions,
+    method,
     headers,
     credentials: 'include',
     ...(body !== undefined ? { body: body instanceof FormData ? body : JSON.stringify(body) } : {}),

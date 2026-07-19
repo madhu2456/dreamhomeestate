@@ -1,10 +1,12 @@
-"""Password hashing, session signing, and password-reset token utilities."""
+"""Password hashing, session signing, CSRF cookies, and password-reset tokens."""
 
 import hashlib
+import secrets
 import uuid
 
 from itsdangerous import URLSafeTimedSerializer
 from passlib.context import CryptContext
+from starlette.responses import Response
 
 from app.config import get_settings
 
@@ -21,6 +23,31 @@ def hash_password(password: str) -> str:
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
+
+
+# --- CSRF (double-submit cookie; not HttpOnly so the browser can send the header) ---
+
+def generate_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def set_csrf_cookie(response: Response, token: str | None = None) -> str:
+    """Set the non-HttpOnly CSRF cookie and return the token value."""
+    value = token or generate_csrf_token()
+    response.set_cookie(
+        key=settings.csrf_cookie_name,
+        value=value,
+        httponly=False,
+        secure=not settings.is_development,
+        samesite="lax",
+        max_age=settings.session_max_age_seconds,
+        path="/",
+    )
+    return value
+
+
+def clear_csrf_cookie(response: Response) -> None:
+    response.delete_cookie(key=settings.csrf_cookie_name, path="/")
 
 
 # --- Session token signing ---

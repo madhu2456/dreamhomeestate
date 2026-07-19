@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # Security
     secret_key: str = Field(alias="SECRET_KEY")
     session_cookie_name: str = Field(default="res_session", alias="SESSION_COOKIE_NAME")
+    # Readable by JS for double-submit CSRF (not HttpOnly). Separate from session.
+    csrf_cookie_name: str = Field(default="res_csrf", alias="CSRF_COOKIE_NAME")
     session_max_age_seconds: int = Field(default=86400, alias="SESSION_MAX_AGE_SECONDS")
 
     # API / CORS

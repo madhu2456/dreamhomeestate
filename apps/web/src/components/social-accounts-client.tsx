@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
+import { apiGet, apiPost, ensureCsrfToken } from '@/lib/api';
 import type { Organization, SocialAccount } from '@/lib/types';
 
 interface CallbackParams {
@@ -63,6 +64,11 @@ export function SocialAccountsClient({
   const [validating, setValidating] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
 
+  // Ensure CSRF cookie exists for users who logged in before it was added
+  useEffect(() => {
+    void ensureCsrfToken();
+  }, []);
+
   // Show toast based on callback params (only once on mount)
   useEffect(() => {
     if (callbackParams.connected === '1' && callbackParams.provider) {
@@ -84,14 +90,10 @@ export function SocialAccountsClient({
   const refreshAccounts = useCallback(async () => {
     if (!selectedOrgId) return;
     try {
-      const res = await fetch(
-        `/api/v1/organizations/${selectedOrgId}/social-accounts`,
-        { credentials: 'include' }
+      const data = await apiGet<SocialAccount[]>(
+        `/api/v1/organizations/${selectedOrgId}/social-accounts`
       );
-      if (res.ok) {
-        const data = await res.json();
-        setAccounts(data);
-      }
+      setAccounts(data);
     } catch {
       // silent
     }
@@ -100,30 +102,12 @@ export function SocialAccountsClient({
   const handleConnect = async (provider: string) => {
     setConnecting(provider);
     try {
+      await ensureCsrfToken();
       const redirectAfter = `/admin/social-accounts?org_id=${selectedOrgId}`;
-      const res = await fetch(
+      const data = await apiPost<{ authorization_url?: string }>(
         `/api/v1/organizations/${selectedOrgId}/social-accounts/${provider}/connect`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ redirect_after: redirectAfter }),
-        }
+        { redirect_after: redirectAfter }
       );
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const detail = body.detail;
-        const message =
-          typeof detail === 'string'
-            ? detail
-            : Array.isArray(detail)
-              ? detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join(', ')
-              : body.message ?? 'Connection failed';
-        throw new Error(message);
-      }
-
-      const data = await res.json();
 
       if (data.authorization_url) {
         // Live OAuth only — send the user to Instagram / X
@@ -152,15 +136,10 @@ export function SocialAccountsClient({
   const handleValidate = async (accountId: string) => {
     setValidating(accountId);
     try {
-      const res = await fetch(
-        `/api/v1/organizations/${selectedOrgId}/social-accounts/${accountId}/validate`,
-        { method: 'POST', credentials: 'include' }
+      await ensureCsrfToken();
+      await apiPost(
+        `/api/v1/organizations/${selectedOrgId}/social-accounts/${accountId}/validate`
       );
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail ?? body.message ?? 'Validation failed');
-      }
 
       await refreshAccounts();
       toast({ title: 'Validation complete', description: 'Account validated successfully.' });
@@ -181,15 +160,10 @@ export function SocialAccountsClient({
     }
     setRevoking(accountId);
     try {
-      const res = await fetch(
-        `/api/v1/organizations/${selectedOrgId}/social-accounts/${accountId}/revoke`,
-        { method: 'POST', credentials: 'include' }
+      await ensureCsrfToken();
+      await apiPost(
+        `/api/v1/organizations/${selectedOrgId}/social-accounts/${accountId}/revoke`
       );
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail ?? body.message ?? 'Revoke failed');
-      }
 
       await refreshAccounts();
       toast({ title: 'Connection revoked', description: 'Account connection has been revoked.' });

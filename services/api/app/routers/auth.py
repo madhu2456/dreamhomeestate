@@ -24,7 +24,9 @@ from app.schemas.auth import (
 from app.schemas.organization import OrganizationMemberOut
 from app.schemas.user import UserOut
 from app.security import (
+    clear_csrf_cookie,
     generate_password_reset_token,
+    set_csrf_cookie,
     sign_session_id,
     verify_password,
     verify_password_reset_token,
@@ -90,7 +92,7 @@ async def login(
         expires_at=expires_at,
     )
 
-    # Set cookie
+    # Session cookie (HttpOnly) + CSRF cookie (readable by JS for X-CSRF-Token)
     response.set_cookie(
         key=settings.session_cookie_name,
         value=session_token,
@@ -100,6 +102,7 @@ async def login(
         max_age=settings.session_max_age_seconds,
         path="/",
     )
+    set_csrf_cookie(response)
 
     memberships = await org_repo.list_for_user(user.id)
 
@@ -144,6 +147,7 @@ async def logout(
         key=settings.session_cookie_name,
         path="/",
     )
+    clear_csrf_cookie(response)
 
     return MessageResponse(detail="Logged out")
 
@@ -160,6 +164,21 @@ async def me(
         user=UserOut.model_validate(current_user),
         memberships=_build_member_records(memberships),
     )
+
+
+@router.get("/csrf")
+async def get_csrf_token(
+    response: Response,
+    current_user: CurrentUser,
+) -> dict[str, str]:
+    """Issue/refresh the double-submit CSRF cookie for browser clients.
+
+    Called by the web app when the CSRF cookie is missing (e.g. after deploy
+    while the session cookie still exists). Requires a valid session.
+    """
+    _ = current_user
+    token = set_csrf_cookie(response)
+    return {"csrf_token": token, "cookie_name": settings.csrf_cookie_name}
 
 
 @router.post("/password-reset-request", response_model=MessageResponse)

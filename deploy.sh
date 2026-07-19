@@ -109,6 +109,7 @@ LOG_LEVEL=info
 
 SECRET_KEY=${SECRET_KEY}
 SESSION_COOKIE_NAME=dhe_session
+CSRF_COOKIE_NAME=dhe_csrf
 SESSION_MAX_AGE_SECONDS=86400
 CORS_ALLOWED_ORIGINS=https://${DOMAIN}
 
@@ -169,6 +170,7 @@ EOF
     set_env_kv LIVE_DOMAIN "https://${DOMAIN}"
     set_env_kv S3_PUBLIC_URL "https://${DOMAIN}/media"
     set_env_kv CORS_ALLOWED_ORIGINS "https://${DOMAIN}"
+    set_env_kv CSRF_COOKIE_NAME "dhe_csrf"
     set_env_kv INSTAGRAM_REDIRECT_URI "https://${DOMAIN}/api/v1/social-accounts/instagram/callback"
     set_env_kv X_REDIRECT_URI "https://${DOMAIN}/api/v1/social-accounts/x/callback"
   fi
